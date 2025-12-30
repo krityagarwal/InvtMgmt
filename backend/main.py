@@ -10,11 +10,11 @@ from psycopg2.extras import RealDictCursor
 import urllib.parse
 from fastapi.staticfiles import StaticFiles
 import mimetypes
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from fastapi import HTTPException
+import logging
 
 load_dotenv()
-
-
 
 # Define settings to pull from Environment Variables
 class Settings(BaseSettings):
@@ -23,13 +23,18 @@ class Settings(BaseSettings):
     DB_HOST: str
     DB_PORT: str
     DB_NAME: str
+    FRONTEND_URL: str
+    #= "http://localhost:5500" # Default value for local dev
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
 
 settings = Settings()
 
 app = FastAPI()
+import os
+print(f"DEBUG: Current Directory is {os.getcwd()}")
+print(f"DEBUG: DB_NAME in Environment: {os.getenv('DB_NAME')}")
 
 origins = [
     "http://localhost:5500",      # Local Live Server
@@ -50,18 +55,55 @@ app.add_middleware(
 )
 
 def get_db_conn():
-    encoded_pass = urllib.parse.quote_plus(DB_PASS)
-    # Using the pooler specific string
-    conn_str = f"postgresql://{DB_USER}:{encoded_pass}@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require"
-    return psycopg2.connect(conn_str, cursor_factory=RealDictCursor)
+    # You must access them from the 'settings' object you created above
+    encoded_pass = urllib.parse.quote_plus(settings.DB_PASS)
+    
+    conn_str = f"postgresql://{settings.DB_USER}:{encoded_pass}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}?sslmode=require"
+    
+    return psycopg2.connect(
+        conn_str, 
+        cursor_factory=RealDictCursor,
+        connect_timeout=10
+    )
+
+
+
+# Set up logging to see errors in Render logs
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 @app.get("/search")
 async def search_shops(name: str):
+    # 1. Validation
+    if not name or len(name.strip()) < 2:
+        raise HTTPException(status_code=400, detail="Search term too short")
+
     query = "SELECT id, name FROM shops WHERE name ILIKE %s"
-    with get_db_conn() as conn:
+    
+    conn = None
+    try:
+        # 2. Get the connection
+        conn = get_db_conn()
+        # 3. Use the cursor within the connection context
         with conn.cursor() as cur:
+            logger.info(f"Searching for: {name}")
             cur.execute(query, (f"%{name}%",))
-            return cur.fetchall()
+            
+            # Since you are using RealDictCursor, cur.fetchall() 
+            # already returns a list of dictionaries!
+            results = cur.fetchall()
+            
+            return {"results": results, "count": len(results)}
+
+    except Exception as e:
+        logger.error(f"Database error during search: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    
+    finally:
+        # 4. CRITICAL: Always close the connection on Render
+        # to prevent "Too many connections" errors in Supabase
+        if conn:
+            conn.close()
 
 @app.get("/inventory/{shop_id}")
 async def get_inventory(shop_id: str):

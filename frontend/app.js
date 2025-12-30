@@ -2,7 +2,7 @@
  * INVENTORY OS - CORE APPLICATION LOGIC
  * Includes: Scanner, Shop Search, Inventory Filtering, and Label Printing
  */
-const API_BASE_URL = "https://invtmgmt.onrender.com/";
+const API_BASE_URL = "https://invtmgmt.onrender.com";
 
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
