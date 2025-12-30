@@ -164,4 +164,4 @@ async def get_product_by_code(item_code: str):
 # This is a "catch-all". If you put it at the top, it might block your API routes.
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('application/manifest+json', '.json')
-app.mount("/", StaticFiles(directory="../frontend", html=True), name="frontend")        
+# app.mount("/", StaticFiles(directory="../frontend", html=True), name="frontend")        
