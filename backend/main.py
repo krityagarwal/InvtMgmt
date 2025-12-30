@@ -25,13 +25,7 @@ app.add_middleware(
 )
 
 
-# The standard pooler format for Supabase
-DB_USER = "postgres.itcwxpomjjtoizikijvo" # Format: postgres.[PROJECT_ID]
-DB_PASS = "Fs3.?_tm2YHZf@3" 
-DB_HOST = "aws-1-ap-south-1.pooler.supabase.com"
-#DB_HOST = "aws-0-ap-south-1.pooler.supabase.com" # Most likely host for Mumbai/Asia region
-DB_PORT = "5432" 
-DB_NAME = "postgres"
+
 
 def get_db_conn():
     encoded_pass = urllib.parse.quote_plus(DB_PASS)
