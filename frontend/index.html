@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="manifest" href="manifest.json" crossorigin="use-credentials">
+
+    <title>Inventory OS | Enterprise</title>
+    
+    <meta name="theme-color" content="#4f46e5">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+            --success: #10b981;
+        }
+
+        * {
+            box-sizing: border-box; /* Crucial for alignment */
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body { 
+            font-family: 'Inter', -apple-system, sans-serif; 
+            background: var(--bg); 
+            color: var(--text-main);
+            margin: 0; 
+            padding-bottom: 80px; /* Space for bulk action bar */
+        }
+
+        /* Top Navigation Bar */
+        header {
+            background: white;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        .container { max-width: 1100px; margin: 1.5rem auto; padding: 0 1rem; }
+
+        /* Professional Search Section */
+        .search-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 10px;
+            margin-bottom: 2rem;
+            flex-wrap: wrap; /* Wraps search on small screens */
+        }
+
+        input[type="text"] {
+            flex: 1;
+            min-width: 200px;
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 16px;
+            transition: all 0.2s;
+        }
+
+        input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1); }
+
+        button {
+            padding: 12px 20px; /* Touch friendly height */
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            touch-action: manipulation;
+        }
+
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-secondary { background: white; color: var(--text-main); border: 1px solid var(--border); }
+        .btn-secondary:hover { background: #f1f5f9; }
+
+        /* Bulk Action Bar (Floating for PWA) */
+        #bulk-actions {
+            display: none;
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1e293b;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 50px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            z-index: 2000;
+            gap: 20px;
+            align-items: center;
+            white-space: nowrap;
+        }
+
+        /* Results Wrapper for Mobile Scrolling */
+        #results {
+            width: 100%;
+            overflow-x: auto; /* Allows horizontal swipe on mobile */
+            -webkit-overflow-scrolling: touch;
+            border-radius: 12px;
+        }
+
+        /* Modern Table Styling */
+        .data-table {
+            width: 100%;
+            min-width: 750px; /* Prevents columns from squishing on mobile */
+            background: white;
+            table-layout: fixed; /* Locked column widths */
+            border-collapse: collapse;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .data-table th, .data-table td {
+            padding: 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .data-table th {
+            background: #f8fafc;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            font-weight: 700;
+        }
+
+        .data-table tr:hover { background: #f8fafc; }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            background: #ecfdf5;
+            color: #065f46;
+            margin-right: 4px;
+        }
+
+        #reader { 
+            width: 100%; 
+            max-width: 500px; 
+            margin: 0 auto 20px auto; 
+            border-radius: 12px; 
+            overflow: hidden; 
+            background: black;
+            border: 2px solid var(--primary);
+            display: none;
+        }
+
+        /* Touch-friendly checkbox */
+        input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--primary);
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div style="font-size: 20px; font-weight: 800; color: var(--primary);">
+        INV<span style="color:var(--text-main)">PRO</span>
+    </div>
+    <div id="status-indicator" style="font-size: 12px; color: var(--text-muted);">🟢 System Online</div>
+</header>
+
+<div class="container">
+    <div id="search-section" class="search-card">
+        <input type="text" id="shopSearch" placeholder="Search for a shop name..." onkeypress="if(event.key === 'Enter') searchShop()">
+        <button class="btn-primary" onclick="searchShop()">Search</button>
+        <button class="btn-secondary" onclick="toggleScanner()">📷 Scan</button>
+        <button class="btn-secondary" onclick="document.getElementById('qr-file-input').click()">📁 Upload</button>
+        <input type="file" id="qr-file-input" accept="image/*" style="display:none" onchange="handleFileSelect(event)">
+    </div>
+
+    <div id="reader"></div>
+
+    <div id="bulk-actions">
+        <span id="selected-count" style="font-size: 14px;">0 items selected</span>
+        <button class="btn-primary" onclick="generateLabels()" style="background: #fbbf24; color: #78350f; padding: 8px 16px;">
+            🖨️ Print Labels
+        </button>
+    </div>
+
+    <div id="results"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
