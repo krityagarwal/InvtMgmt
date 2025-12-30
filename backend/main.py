@@ -10,9 +10,24 @@ from psycopg2.extras import RealDictCursor
 import urllib.parse
 from fastapi.staticfiles import StaticFiles
 import mimetypes
-
+from pydantic_settings import BaseSettings
 
 load_dotenv()
+
+
+
+# Define settings to pull from Environment Variables
+class Settings(BaseSettings):
+    DB_USER: str
+    DB_PASS: str
+    DB_HOST: str
+    DB_PORT: str
+    DB_NAME: str
+
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
 
 app = FastAPI()
 
@@ -24,18 +39,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-
-
 def get_db_conn():
     encoded_pass = urllib.parse.quote_plus(DB_PASS)
     # Using the pooler specific string
     conn_str = f"postgresql://{DB_USER}:{encoded_pass}@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require"
     return psycopg2.connect(conn_str, cursor_factory=RealDictCursor)
-
-# @app.get("/")
-# def home():
-#     return {"status": "online", "message": "Raw SQL API is running"}
 
 @app.get("/search")
 async def search_shops(name: str):
