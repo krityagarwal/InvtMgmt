@@ -31,9 +31,19 @@ settings = Settings()
 
 app = FastAPI()
 
+origins = [
+    "http://localhost:5500",      # Local Live Server
+    "http://127.0.0.1:5500",    # Alternative Localhost
+]
+
+# Add your Render Frontend URL from an environment variable
+frontend_url = os.getenv("FRONTEND_URL")
+if frontend_url:
+    origins.append(frontend_url)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=origins,       # Use the specific list instead of ["*"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

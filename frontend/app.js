@@ -2,6 +2,7 @@
  * INVENTORY OS - CORE APPLICATION LOGIC
  * Includes: Scanner, Shop Search, Inventory Filtering, and Label Printing
  */
+const API_BASE_URL = "https://invtmgmt.onrender.com/";
 
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
@@ -70,7 +71,7 @@ window.onScanSuccess = async function(decodedText) {
     window.stopScanner();
     
     // Use Query Parameter to safely handle slashes in item codes
-    const url = `http://127.0.0.1:8000/product/by-code?item_code=${encodeURIComponent(decodedText)}`;
+    const url = `${API_BASE_URL}/product/by-code?item_code=${encodeURIComponent(decodedText)}`;
     
     try {
         const response = await fetch(url);
@@ -114,7 +115,7 @@ window.searchShop = async function() {
     resultsDiv.innerHTML = "<p style='text-align:center;'>Searching enterprise database...</p>";
     
     try {
-        const response = await fetch(`http://127.0.0.1:8000/search?name=${encodeURIComponent(query)}`);
+        const response = await fetch(`${API_BASE_URL}/search?name=${encodeURIComponent(query)}`);
         const data = await response.json();
 
         let html = '<div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem;">';
@@ -138,7 +139,7 @@ window.viewInventory = async function(shopId) {
     resultsDiv.innerHTML = "<p style='text-align:center;'>Loading inventory records...</p>";
     
     try {
-        const response = await fetch(`http://127.0.0.1:8000/inventory/${shopId}`);
+        const response = await fetch(`${API_BASE_URL}/inventory/${shopId}`);
         ALL_ITEMS = await response.json(); 
         renderInventoryTable(ALL_ITEMS);
     } catch (e) { 
@@ -216,37 +217,6 @@ window.filterInventory = function() {
     tbody.innerHTML = generateRowsHtml(filtered); // Uses the same helper for consistency
 };
 
-/**
- * SECTION 3: FILTER & UI INTERACTION
- */
-
-// window.filterInventory = function() {
-//     const term = document.getElementById('tableFilter').value.toLowerCase();
-    
-//     const filtered = ALL_ITEMS.filter(item => {
-//         const searchableText = `${item.item_code} ${item.category_name} ${item.vendor_name}`.toLowerCase();
-//         return searchableText.includes(term);
-//     });
-
-//     const tbody = document.getElementById('inventoryBody');
-//     tbody.innerHTML = filtered.map(item => {
-//         const itemData = JSON.stringify({item_code: item.item_code});
-//         return `
-//             <tr>
-//                 <td><input type="checkbox" class="print-selector" value='${itemData}' onclick="updateSelectedCount()"></td>
-//                 <td>
-//                     <div style="font-weight:600;">${item.item_code}</div>
-//                     <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase;">${item.category_name || ''}</div>
-//                 </td>
-//                 <td style="font-size: 13px; color: var(--text-muted);">${item.vendor_name || '-'}</td>
-//                 <td><span class="badge">D: ${item.qty_display}</span></td>
-//                 <td style="font-weight:bold;">₹${item.selling_price}</td>
-//                 <td style="text-align:right;">
-//                     <button class="btn-secondary" onclick="handleAddToBasket('${item.id}', '${item.item_code}')" style="padding: 6px 12px; font-size: 12px;">+ Add</button>
-//                 </td>
-//             </tr>`;
-//     }).join('');
-// };
 
 window.toggleAll = function(master) {
     document.querySelectorAll('.print-selector').forEach(cb => cb.checked = master.checked);
@@ -334,7 +304,7 @@ window.handleAddToBasket = async function(productId, code) {
         return;
     }
     try {
-        const response = await fetch('http://127.0.0.1:8000/basket/add', {
+        const response = await fetch('${API_BASE_URL}/basket/add', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
