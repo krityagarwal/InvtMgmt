@@ -24,7 +24,6 @@ class Settings(BaseSettings):
     DB_PORT: str
     DB_NAME: str
     FRONTEND_URL: str
-    #= "http://localhost:5500" # Default value for local dev
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -38,7 +37,8 @@ print(f"DEBUG: DB_NAME in Environment: {os.getenv('DB_NAME')}")
 
 origins = [
     "http://localhost:5500",      # Local Live Server
-    "http://127.0.0.1:5500",    # Alternative Localhost
+    "http://127.0.0.1:5500",
+      "http://127.0.0.1:8000"      # Alternative Localhost
 ]
 
 # Add your Render Frontend URL from an environment variable

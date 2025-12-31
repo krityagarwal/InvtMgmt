@@ -3,6 +3,7 @@
  * Includes: Scanner, Shop Search, Inventory Filtering, and Label Printing
  */
 const API_BASE_URL = "https://invtmgmt.onrender.com";
+// const API_BASE_URL = "http://127.0.0.1:8000";
 
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
@@ -107,6 +108,7 @@ window.onScanSuccess = async function(decodedText) {
  * SECTION 2: SHOP & INVENTORY LOGIC
  */
 
+
 window.searchShop = async function() {
     const query = document.getElementById('shopSearch').value;
     const resultsDiv = document.getElementById('results');
@@ -118,8 +120,13 @@ window.searchShop = async function() {
         const response = await fetch(`${API_BASE_URL}/search?name=${encodeURIComponent(query)}`);
         const data = await response.json();
 
+        // CHANGE THIS LINE: data is now {results: [], count: X}
+        const shops = data.results; 
+
         let html = '<div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem;">';
-        data.forEach(shop => {
+        
+        // Use 'shops' instead of 'data'
+        shops.forEach(shop => {
             html += `
                 <div class="search-card" onclick="viewInventory('${shop.id}')" style="cursor:pointer; flex-direction:column; align-items:flex-start; margin:0;">
                     <div style="font-weight:700; font-size:18px;">${shop.name}</div>
@@ -129,7 +136,8 @@ window.searchShop = async function() {
         });
         resultsDiv.innerHTML = html + '</div>';
     } catch (error) {
-        resultsDiv.innerHTML = "<p>Error: Could not reach the API server.</p>";
+        console.error("Search error details:", error); // Log the actual error to console
+        resultsDiv.innerHTML = "<p>Error: Could not reach the API server or invalid data format.</p>";
     }
 };
 
