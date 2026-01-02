@@ -3,8 +3,8 @@
  * Includes: Scanner, Shop Search, Inventory Filtering, and Label Printing
  */
 // CHANGE BEFORE DE
-//const API_BASE_URL = "https://invtmgmt.onrender.com";
- const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = "https://invtmgmt.onrender.com";
+// const API_BASE_URL = "http://127.0.0.1:8000";
 /**
  * INVENTORY OS - CORE APPLICATION LOGIC
  * Features: QR Scanner, Shop Search, Live Inventory Filtering, and Bulk Label Printing
