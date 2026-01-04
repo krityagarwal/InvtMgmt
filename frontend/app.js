@@ -2,7 +2,7 @@
  * INVENTORY OS - CORE APPLICATION LOGIC
  * Includes: Scanner, Shop Search, Inventory Filtering, and Label Printing
  */
-// CHANGE BEFORE DE
+// CHANGE BEFORE DEPLOYMENT
 const API_BASE_URL = "https://invtmgmt.onrender.com";
 // const API_BASE_URL = "http://127.0.0.1:8000";
 
