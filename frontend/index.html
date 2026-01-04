@@ -13,7 +13,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     
     <script src="https://unpkg.com/html5-qrcode"></script>
-    
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         :root {
             --primary: #4f46e5;
@@ -183,6 +183,19 @@
             width: 90%;
             max-width: 400px;
         }
+        /* .nav-link {
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-decoration: none;
+            border-radius: 6px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        } */
+
         .nav-link {
             padding: 8px 16px;
             font-size: 13px;
@@ -194,6 +207,7 @@
             display: flex;
             align-items: center;
             gap: 6px;
+            border: 1px solid transparent; /* Keeps layout stable when active border appears */
         }
 
         .nav-link:hover {
@@ -213,27 +227,50 @@
             background: transparent;
         }
 
-        /* The "Active" state that makes it look professional */
-        .nav-btn.active {
+        .nav-link.active, .nav-btn.active {
             background: white !important;
             color: var(--primary) !important;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
             font-weight: 700;
-            border: 1px solid var(--border);
+            border: 1px solid var(--border) !important;
+        }
+        /* Excel-style input styling for Bulk Entry */
+        #bulkInsertBody input, #bulkInsertBody select {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid transparent;
+            background: transparent;
+            font-size: 13px;
+            outline: none;
+        }
+
+        #bulkInsertBody tr:hover {
+            background: #f8fafc; /* Highlighting the row being edited */
+        }
+
+        #bulkInsertBody input:focus, #bulkInsertBody select:focus {
+            background: white;
+            border-color: var(--primary);
+            border-radius: 4px;
+            box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+        }
+
+        /* Ensure the large modal is scrollable on small screens */
+        @media (max-width: 1200px) {
+            .modal-content {
+                width: 98% !important;
+                margin: 1% auto !important;
+                padding: 15px !important;
+            }
         }
     </style>
 </head>
 <body>
 
-<header>
+<!-- <header>
     <div style="font-size: 20px; font-weight: 800; color: var(--primary);">
         INV<span style="color:var(--text-main)">PRO</span>
     </div>
-    <!-- <div id="header-actions" style="display: none; gap: 8px;">
-        <button class="btn-secondary" onclick="viewInventory(CURRENT_SHOP_ID)">📦 Inventory</button>
-        <button class="btn-secondary" onclick="loadOrdersPage()">📑 Orders</button>
-        <button class="btn-secondary" onclick="location.reload()">🔄 Exit</button>
-    </div> -->
     <div id="header-actions" style="display: none; gap: 4px;">
     <a href="#" class="nav-link active" onclick="viewInventory(CURRENT_SHOP_ID)">
         <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
@@ -248,6 +285,36 @@
         <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
         Exit
     </button>
+    </div> 
+</header> -->
+
+<header style="display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; border-bottom: 1px solid var(--border);">
+    <div style="font-size: 20px; font-weight: 800; color: var(--primary);">
+        INV<span style="color:var(--text-main)">PRO</span>
+    </div>
+
+    <div id="header-actions" style="display: none; align-items: center; gap: 4px; background: #f8fafc; padding: 4px; border-radius: 10px; border: 1px solid var(--border);">
+        <a href="#" id="nav-inv" class="nav-link active" onclick="viewInventory(CURRENT_SHOP_ID)">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
+            Inventory
+        </a>
+        <a href="#" id="nav-ord" class="nav-link" onclick="loadOrdersPage()">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
+            Orders
+        </a>
+
+        <div style="width: 1px; height: 18px; background: #cbd5e1; margin: 0 8px;"></div>
+
+        <button id="btn-add-inventory" onclick="openAddInventoryModal()" 
+                style="display: flex; align-items: center; gap: 6px; background: #10b981; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: opacity 0.2s;">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+            Add Item
+        </button>
+
+        <button class="nav-link" onclick="location.reload()" style="color: #ef4444; background:none; border:none; display: flex; align-items: center; gap: 4px;">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+            Exit
+        </button>
     </div> 
 </header>
 
@@ -310,6 +377,45 @@
         <div style="display: flex; gap: 10px;">
             <button class="btn-primary" onclick="confirmCreateBasket()" style="flex: 1;">Start</button>
             <button class="btn-secondary" onclick="closeModal('clientModal')" style="flex: 1;">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<div id="addProductModal" class="modal">
+    <div class="modal-content" style="max-width: 95%; width: 1200px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2 style="margin:0; font-size: 1.25rem;">Bulk Inventory Entry</h2>
+            <button class="btn-primary" onclick="addNewRow()" style="background: var(--primary); padding: 8px 16px;">
+                + Add Another Row
+            </button>
+        </div>
+
+        <div style="overflow-x: auto; border: 1px solid var(--border); border-radius: 8px;">
+            <table id="bulkInsertTable" style="width: 100%; border-collapse: collapse; background: white;">
+                <thead style="background: #f8fafc; border-bottom: 2px solid var(--border);">
+                    <tr>
+                        <th style="padding: 12px; font-size: 12px; text-align: left;">Category</th>
+                        <th style="padding: 12px; font-size: 12px; text-align: left;">Item Code</th>
+                        <th style="padding: 12px; font-size: 12px; text-align: left;">Vendor</th>
+                        <th style="padding: 12px; font-size: 12px; width: 60px;">Disp. Qty</th>
+                        <th style="padding: 12px; font-size: 12px; width: 60px;">Godown Qty</th>
+                        <th style="padding: 12px; font-size: 12px; width: 100px;">Cost Price</th>
+                        <th style="padding: 12px; font-size: 12px; width: 80px;">Overhead</th>
+                        <th style="padding: 12px; font-size: 12px; width: 100px;">Selling Price</th>
+                        <th style="padding: 12px; font-size: 12px;">Photo</th>
+                        <th style="padding: 12px; width: 40px;"></th>
+                    </tr>
+                </thead>
+                <tbody id="bulkInsertBody">
+                    </tbody>
+            </table>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px;">
+            <button class="btn-secondary" onclick="closeModal('addProductModal')">Cancel</button>
+            <button id="bulkSaveBtn" class="btn-primary" onclick="handleBulkSave()" style="padding: 10px 24px;">
+                Save All Items
+            </button>
         </div>
     </div>
 </div>

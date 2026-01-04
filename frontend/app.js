@@ -3,8 +3,14 @@
  * Includes: Scanner, Shop Search, Inventory Filtering, and Label Printing
  */
 // CHANGE BEFORE DE
-//const API_BASE_URL = "https://invtmgmt.onrender.com";
- const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = "https://invtmgmt.onrender.com";
+// const API_BASE_URL = "http://127.0.0.1:8000";
+
+// Initialize Supabase
+const SUPABASE_URL = 'https://itcwxpomjjtoizikijvo.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml0Y3d4cG9tamp0b2l6aWtpanZvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4MjEyODAsImV4cCI6MjA4MjM5NzI4MH0.JmJXjT6FNBFbH_EAt8ejEw7MC3HZdjL-JNMaf4NdSzY';
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
 /**
  * INVENTORY OS - CORE APPLICATION LOGIC
  * Features: QR Scanner, Shop Search, Live Inventory Filtering, and Bulk Label Printing
@@ -769,6 +775,7 @@ window.loadOrdersPage = async function() {
     }
 };
 
+
 window.editOrder = async function(orderId, clientName) {
     // 1. Set this order as the active session
     ACTIVE_BASKET_ID = orderId;
@@ -1185,16 +1192,38 @@ window.openClientModal = function() {
     }
 };
 
-window.closeModal = function(modalId) {
-    const modal = document.getElementById(modalId);
+// window.closeModal = function(modalId) {
+//     const modal = document.getElementById(modalId);
+//     if (modal) modal.style.display = 'none';
+// };
+
+// // Close modal if user clicks outside of it
+// window.onclick = function(event) {
+//     const modal = document.getElementById('clientModal');
+//     if (event.target == modal) {
+//         modal.style.display = "none";
+//     }
+// };
+
+window.closeModal = function(id) {
+    const modal = document.getElementById(id);
     if (modal) modal.style.display = 'none';
 };
 
-// Close modal if user clicks outside of it
+// Expanded to handle multiple modals
 window.onclick = function(event) {
-    const modal = document.getElementById('clientModal');
-    if (event.target == modal) {
-        modal.style.display = "none";
+    const clientModal = document.getElementById('clientModal');
+    const productModal = document.getElementById('addProductModal');
+    const basketModal = document.getElementById('basketModal');
+
+    if (event.target === clientModal) {
+        clientModal.style.display = "none";
+    }
+    if (event.target === productModal) {
+        productModal.style.display = "none";
+    }
+    if (event.target === basketModal) {
+        basketModal.style.display = "none";
     }
 };
 
@@ -1221,5 +1250,189 @@ window.updateFloatingBarCount = async function() {
 
     } catch (e) {
         console.error("Error updating basket count:", e);
+    }
+};
+
+// Fetch categories from the database
+window.loadCategories = async function() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/categories`);
+        const categories = await response.json();
+        const select = document.getElementById('newProdCategory');
+        
+        select.innerHTML = categories.map(cat => 
+            `<option value="${cat.name}">${cat.name}</option>`
+        ).join('');
+    } catch (e) {
+        console.error("Failed to load categories", e);
+    }
+};
+
+window.handleSaveProduct = async function() {
+    const btn = document.getElementById('saveProductBtn');
+    const file = document.getElementById('newProdImage').files[0];
+    
+    const productData = {
+        item_code: document.getElementById('newProdCode').value,
+        category: document.getElementById('newProdCategory').value,
+        vendor_name: document.getElementById('newVendor').value,
+        display_qty: parseInt(document.getElementById('newDisplayQty').value) || 0,
+        godown_qty: parseInt(document.getElementById('newGodownQty').value) || 0,
+        cost_price: parseFloat(document.getElementById('newCostPrice').value) || 0,
+        overhead: parseFloat(document.getElementById('newOverhead').value) || 0,
+        unit_price: parseFloat(document.getElementById('newSellingPrice').value) || 0, // This is Selling Price
+        remark: document.getElementById('newRemark').value,
+        shop_id: CURRENT_SHOP_ID,
+        image_url: ""
+    };
+
+    try {
+        btn.disabled = true;
+        btn.innerText = "Processing...";
+
+        // 1. Image Upload to Supabase
+        if (file) {
+            const fileName = `${Date.now()}_${file.name}`;
+            const { data, error } = await supabaseClient.storage
+                .from('product-images')
+                .upload(`products/${fileName}`, file);
+            if (error) throw error;
+
+            const { data: urlData } = supabaseClient.storage
+                .from('product-images')
+                .getPublicUrl(`products/${fileName}`);
+            productData.image_url = urlData.publicUrl;
+        }
+
+        // 2. Save to Backend
+        const response = await fetch(`${API_BASE_URL}/inventory/add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(productData)
+        });
+
+        if (response.ok) {
+            showToast("Product added successfully!");
+            closeModal('addProductModal');
+            viewInventory(CURRENT_SHOP_ID);
+        }
+    } catch (e) {
+        alert("Save failed: " + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerText = "Save Product";
+    }
+};
+
+let CATEGORY_OPTIONS_HTML = ""; // Cached category list
+
+window.openAddInventoryModal = async function() {
+    try {
+        // 1. Fetch categories for the dropdown once
+        const response = await fetch(`${API_BASE_URL}/categories`);
+        if (!response.ok) throw new Error("Could not load categories");
+        
+        const categories = await response.json();
+        // Store globally so addNewRow can use it without re-fetching
+        CATEGORY_OPTIONS_HTML = categories.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+
+        // 2. Reset table and start with one clean row
+        const tbody = document.getElementById('bulkInsertBody');
+        tbody.innerHTML = "";
+        addNewRow();
+
+        // 3. Show the modal
+        document.getElementById('addProductModal').style.display = 'block';
+    } catch (e) {
+        console.error("Setup failed:", e);
+        alert("Failed to initialize inventory modal. Check API.");
+    }
+};
+
+window.addNewRow = function() {
+    const tbody = document.getElementById('bulkInsertBody');
+    const row = document.createElement('tr');
+    row.className = "bulk-row";
+    row.style.borderBottom = "1px solid var(--border)";
+    
+    row.innerHTML = `
+        <td style="padding: 8px;"><select class="row-cat" style="width:100%; border:1px solid #ddd; padding:4px; border-radius:4px;">${CATEGORY_OPTIONS_HTML}</select></td>
+        <td style="padding: 8px;"><input type="text" class="row-code" placeholder="8001/..." style="width:100%; border:1px solid #ddd; padding:4px;"></td>
+        <td style="padding: 8px;"><input type="text" class="row-vendor" style="width:100%; border:1px solid #ddd; padding:4px;"></td>
+        <td style="padding: 8px;"><input type="number" class="row-disp" value="0" style="width:60px; border:1px solid #ddd; padding:4px;"></td>
+        <td style="padding: 8px;"><input type="number" class="row-godown" value="0" style="width:60px; border:1px solid #ddd; padding:4px;"></td>
+        <td style="padding: 8px;"><input type="number" class="row-cost" placeholder="0" style="width:100%; border:1px solid #ddd; padding:4px;"></td>
+        <td style="padding: 8px;"><input type="number" class="row-overhead" placeholder="Exp" style="width:80px; border:1px solid #ddd; padding:4px;"></td>
+        <td style="padding: 8px;"><input type="number" class="row-sell" placeholder="0" style="width:100%; border:1px solid #ddd; padding:4px;"></td>
+        <td style="padding: 8px;"><input type="file" class="row-file" style="font-size:10px; width:150px;"></td>
+        <td style="padding: 8px;"><button onclick="this.parentElement.parentElement.remove()" style="color:red; border:none; background:none; cursor:pointer;">&times;</button></td>
+    `;
+    tbody.appendChild(row);
+};
+
+window.handleBulkSave = async function() {
+    const rows = document.querySelectorAll('.bulk-row');
+    const saveBtn = document.getElementById('bulkSaveBtn');
+    saveBtn.disabled = true;
+    saveBtn.innerText = "Processing Bulk Upload...";
+
+    const uploadPromises = Array.from(rows).map(async (row) => {
+        const file = row.querySelector('.row-file').files[0];
+        let imageUrl = "";
+
+        // Inside your loop in handleBulkSave
+        if (file) {
+            const fileName = `${Date.now()}_${file.name.replace(/\s/g, '_')}`;
+            // Construct path: SHOP_ID/products/FILENAME
+            const filePath = `${CURRENT_SHOP_ID}/products/${fileName}`;
+
+            const { data, error } = await supabaseClient.storage
+                .from('product-images')
+                .upload(filePath, file);
+
+            if (error) throw error;
+
+            const { data: urlData } = supabaseClient.storage
+                .from('product-images')
+                .getPublicUrl(filePath);
+            
+            imageUrl = urlData.publicUrl;
+        }
+
+        return {
+            item_code: row.querySelector('.row-code').value,
+            category_id: row.querySelector('.row-cat').value,
+            vendor_name: row.querySelector('.row-vendor').value,
+            display_qty: parseInt(row.querySelector('.row-disp').value) || 0,
+            godown_qty: parseInt(row.querySelector('.row-godown').value) || 0,
+            cost_price: parseFloat(row.querySelector('.row-cost').value) || 0,
+            overhead: parseFloat(row.querySelector('.row-overhead').value) || 0,
+            unit_price: parseFloat(row.querySelector('.row-sell').value) || 0,
+            image_url: imageUrl,
+            shop_id: CURRENT_SHOP_ID
+        };
+    });
+
+    try {
+        const rowsArray = Array.from(rows);
+        console.log("Checking Row 1 Category ID:", rowsArray[0].querySelector('.row-cat').value);
+        const payload = await Promise.all(uploadPromises);
+        
+        const response = await fetch(`${API_BASE_URL}/inventory/bulk-add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (response.ok) {
+            showToast("Successfully added all items!");
+            closeModal('addProductModal');
+            viewInventory(CURRENT_SHOP_ID);
+        }
+    } catch (e) {
+        alert("Bulk upload failed: " + e.message);
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.innerText = "Save All Items";
     }
 };

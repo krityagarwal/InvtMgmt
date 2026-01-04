@@ -14,6 +14,7 @@ import mimetypes
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from fastapi import HTTPException
 import logging
+from config import get_db_conn
 
 load_dotenv()
 
@@ -55,17 +56,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def get_db_conn():
-    # You must access them from the 'settings' object you created above
-    encoded_pass = urllib.parse.quote_plus(settings.DB_PASS)
+# def get_db_conn():
+#     # You must access them from the 'settings' object you created above
+#     encoded_pass = urllib.parse.quote_plus(settings.DB_PASS)
     
-    conn_str = f"postgresql://{settings.DB_USER}:{encoded_pass}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}?sslmode=require"
+#     conn_str = f"postgresql://{settings.DB_USER}:{encoded_pass}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}?sslmode=require"
     
-    return psycopg2.connect(
-        conn_str, 
-        cursor_factory=RealDictCursor,
-        connect_timeout=10
-    )
+#     return psycopg2.connect(
+#         conn_str, 
+#         cursor_factory=RealDictCursor,
+#         connect_timeout=10
+#     )
 
 
 
@@ -108,23 +109,21 @@ async def search_shops(name: str):
 
 @app.get("/inventory/{shop_id}")
 async def get_inventory(shop_id: str):
-    query = """
-        SELECT 
-            p.id, p.item_code, p.photo_url, p.cost_price, p.selling_price, p.vendor_name, p.remark,
-            c.name as category_name,
-            i.qty_display, i.qty_godown
-        FROM products p
-        LEFT JOIN categories c ON p.category_id = c.id
-        LEFT JOIN inventory i ON p.id = i.product_id
-        WHERE p.shop_id = %s
-    """
     try:
         with get_db_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute(query, (shop_id,))
+                cur.execute("""
+                    SELECT 
+                        p.id, p.item_code, p.selling_price, p.vendor_name, p.photo_url,
+                        p.qty_display, p.qty_godown, c.name as category_name, p.created_at
+                    FROM products p
+                    LEFT JOIN categories c ON p.category_id = c.id
+                    WHERE p.shop_id = %s
+                    ORDER BY p.created_at DESC
+                """, (shop_id,))
                 return cur.fetchall()
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class BasketItem(BaseModel):
@@ -188,21 +187,10 @@ async def get_active_basket(shop_id: str):
     
 @app.get("/product/by-code")
 async def get_product_by_code(item_code: str):
-    query = """
-        SELECT p.*, c.name as category_name, i.qty_display, i.qty_godown
-        FROM products p
-        LEFT JOIN categories c ON p.category_id = c.id
-        LEFT JOIN inventory i ON p.id = i.product_id
-        WHERE p.item_code = %s
-        LIMIT 1
-    """
     with get_db_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, (item_code,))
-            res = cur.fetchone()
-            if res is None:
-                return {"error": "not_found"} # Always return a dictionary
-            return res    
+            cur.execute("SELECT * FROM products WHERE item_code = %s", (item_code,))
+            return cur.fetchone() 
             
 class BasketCreate(BaseModel):
     shop_id: str
@@ -241,29 +229,39 @@ async def create_basket(req: BasketCreate = Body(...)):
 @app.post("/order/finalize")
 async def finalize_order(order_id: str):
     # This logic moves status from 'pi' or 'bucket' to 'sold'
-    # and executes the Godown -> Display waterfall deduction.
+    # and executes the Godown -> Display waterfall deduction directly on the products table.
     query_items = "SELECT product_id, quantity FROM order_items WHERE order_id = %s"
     
+    # We use get_db_conn from config.py
     with get_db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(query_items, (order_id,))
             items = cur.fetchall()
             
             for item in items:
-                # Waterfall Deduction Logic
-                cur.execute("SELECT qty_godown, qty_display FROM inventory WHERE product_id = %s", (item['product_id'],))
+                # Waterfall Deduction Logic updated for unified 'products' table
+                cur.execute("SELECT qty_godown, qty_display FROM products WHERE id = %s", (item['product_id'],))
                 stock = cur.fetchone()
                 
-                if stock['qty_godown'] >= item['quantity']:
-                    cur.execute("UPDATE inventory SET qty_godown = qty_godown - %s WHERE product_id = %s", 
-                                (item['quantity'], item['product_id']))
+                if not stock:
+                    continue
+
+                qty_needed = item['quantity']
+                
+                if stock['qty_godown'] >= qty_needed:
+                    # Deduct entirely from Godown
+                    cur.execute("UPDATE products SET qty_godown = qty_godown - %s WHERE id = %s", 
+                                (qty_needed, item['product_id']))
                 else:
-                    rem = item['quantity'] - stock['qty_godown']
-                    cur.execute("UPDATE inventory SET qty_godown = 0, qty_display = qty_display - %s WHERE product_id = %s", 
-                                (rem, item['product_id']))
+                    # Deduct what's left in Godown, then the rest from Display
+                    remainder = qty_needed - stock['qty_godown']
+                    cur.execute("UPDATE products SET qty_godown = 0, qty_display = qty_display - %s WHERE id = %s", 
+                                (remainder, item['product_id']))
             
-            cur.execute("UPDATE orders SET status = 'sold' WHERE id = %s", (order_id,))
+            # Finalize the order status
+            cur.execute("UPDATE orders SET status = 'sold', updated_at = NOW() WHERE id = %s", (order_id,))
             conn.commit()
+            
     return {"status": "success"}
 
 class PIRequest(BaseModel):
@@ -424,31 +422,22 @@ async def finalize_sale(order_id: str):
     try:
         with get_db_conn() as conn:
             with conn.cursor() as cur:
-                # 1. Fetch all items in this PI
                 cur.execute("SELECT product_id, quantity FROM order_items WHERE order_id = %s", (order_id,))
                 items = cur.fetchall()
-
                 for item in items:
-                    pid = item['product_id']
-                    qty_needed = item['quantity']
-
-                    # 2. Check current stock levels
-                    cur.execute("SELECT qty_godown, qty_display FROM inventory WHERE product_id = %s", (pid,))
+                    # Stock deduction logic now targets 'products' table directly
+                    cur.execute("SELECT qty_godown, qty_display FROM products WHERE id = %s", (item['product_id'],))
                     stock = cur.fetchone()
-
-                    # 3. Waterfall Logic: Godown first, then Display
-                    if stock['qty_godown'] >= qty_needed:
-                        cur.execute("UPDATE inventory SET qty_godown = qty_godown - %s WHERE product_id = %s", (qty_needed, pid))
+                    if stock['qty_godown'] >= item['quantity']:
+                        cur.execute("UPDATE products SET qty_godown = qty_godown - %s WHERE id = %s", (item['quantity'], item['product_id']))
                     else:
-                        remaining = qty_needed - stock['qty_godown']
-                        cur.execute("UPDATE inventory SET qty_godown = 0, qty_display = qty_display - %s WHERE product_id = %s", (remaining, pid))
-
-                # 4. Update order to 'sold'
+                        remaining = item['quantity'] - stock['qty_godown']
+                        cur.execute("UPDATE products SET qty_godown = 0, qty_display = qty_display - %s WHERE id = %s", (remaining, item['product_id']))
                 cur.execute("UPDATE orders SET status = 'sold', updated_at = NOW() WHERE id = %s", (order_id,))
                 conn.commit()
-                return {"status": "success", "message": "Sale finalized and stock updated"}
+                return {"status": "success"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))    
+        raise HTTPException(status_code=500, detail=str(e))   
     
 def update_order_total(cur, order_id):
     """Recalculates and persists the order total based on items and discount."""
@@ -485,6 +474,89 @@ async def delete_order(order_id: str):
                 
                 conn.commit()
                 return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ProductAdd(BaseModel):
+    item_code: str
+    category_id: str
+    vendor_name: str
+    display_qty: int
+    godown_qty: int
+    cost_price: float
+    overhead: float
+    unit_price: float # Selling Price
+    remark: str
+    shop_id: str
+    image_url: str
+
+@app.get("/categories")
+async def get_categories():
+    try:
+        with get_db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id,name FROM categories ORDER BY name ASC")
+                return cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))    
+
+@app.post("/inventory/add")
+async def add_inventory(req: ProductAdd):
+    try:
+        with get_db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO products (
+                        item_code, category, vendor_name, display_qty, godown_qty, 
+                        cost_price, overhead, unit_price, remark, shop_id, image_url, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                """, (
+                    req.item_code, req.category, req.vendor_name, req.display_qty, 
+                    req.godown_qty, req.cost_price, req.overhead, req.unit_price, 
+                    req.remark, req.shop_id, req.image_url
+                ))
+                conn.commit()
+                return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+from typing import List
+
+class BulkProductAdd(BaseModel):
+    shop_id: str
+    category_id: str
+    item_code: str
+    image_url: str
+    cost_price: float
+    overhead: float
+    unit_price: float
+    vendor_name: str
+    display_qty: int
+    godown_qty: int
+
+# 1. Unified Bulk Insert
+@app.post("/inventory/bulk-add")
+async def bulk_add_inventory(items: List[BulkProductAdd]):
+    try:
+        with get_db_conn() as conn:
+            with conn.cursor() as cur:
+                query = """
+                    INSERT INTO products (
+                        shop_id, category_id, item_code, photo_url, 
+                        cost_price, overhead_expense, selling_price, 
+                        vendor_name, qty_display, qty_godown, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                """
+                values = [
+                    (
+                        i.shop_id, i.category_id, i.item_code, i.image_url, 
+                        i.cost_price, i.overhead, i.unit_price, 
+                        i.vendor_name, i.display_qty, i.godown_qty
+                    ) for i in items
+                ]
+                cur.executemany(query, values)
+                conn.commit()
+                return {"status": "success", "count": len(items)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
