@@ -167,7 +167,7 @@ export function ProformaInvoices({
       }
 
       doc.setFontSize(12);
-      doc.setFont(undefined, "bold");
+      doc.setFont("Helvetica", "bold");
       doc.setFillColor(240, 240, 240);
       doc.rect(summaryX - 10, yPosition - 6, 80, 8, "F");
       doc.text("TOTAL AMOUNT:", summaryX, yPosition);
@@ -176,7 +176,7 @@ export function ProformaInvoices({
       // Footer
       yPosition = pageHeight - 30;
       doc.setFontSize(9);
-      doc.setFont(undefined, "normal");
+      doc.setFont("Helvetica", "normal");
       doc.setTextColor(100, 100, 100);
       doc.text("Note: This is a Proforma Invoice. It is not an official invoice unless converted to sale.", 20, yPosition);
       doc.text(`Generated on: ${new Date().toLocaleDateString()}`, 20, yPosition + 6);
@@ -386,7 +386,7 @@ function PITable({ invoices, expandedPIId, onToggleExpand, onEditPI, onConvertTo
                     onClick={(e) => {
                       e.stopPropagation();
                       onFetchDetails(pi.id);
-                      const latestPI = invoices.find(inv => inv.id === pi.id) || pi;
+                      const latestPI = invoices.find((inv: ProformaInvoice) => inv.id === pi.id) || pi;
                       onSetPrintingPI(latestPI);
                     }}
                     title="Print PI"
