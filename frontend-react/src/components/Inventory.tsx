@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React,{ useState } from "react";
 import { Package, Search, AlertTriangle } from "lucide-react";
 import { Input } from "./ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -47,6 +47,28 @@ export function Inventory({ products }: InventoryProps) {
       }
       return newSelection;
     });
+  };
+
+  const InventoryImage = ({ url, alt }: { url?: string | null, alt: string }) => {
+    const [error, setError] = React.useState(false);
+
+    if (!url || error) {
+      return (
+        <div className="flex size-full items-center justify-center bg-gray-100 rounded-md">
+          <span className="text-[10px] text-gray-400">No Img</span>
+        </div>
+      );
+    }
+
+    return (
+      <img
+        src={url}
+        alt={alt}
+        className="size-full object-cover transition-transform hover:scale-110 cursor-zoom-in rounded-md"
+        loading="lazy"
+        onError={() => setError(true)}
+      />
+    );
   };
 
   const updateQty = (productId: string, qty: number) => {
@@ -124,6 +146,7 @@ export function Inventory({ products }: InventoryProps) {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-[80px]">Image</TableHead> {/* New Header */}
                 <TableHead>Barcode</TableHead>
                 <TableHead>Vendor</TableHead>
                 <TableHead>Category</TableHead>
@@ -135,19 +158,25 @@ export function Inventory({ products }: InventoryProps) {
             <TableBody>
               {filteredProducts.map((product) => (
                 <TableRow key={product.id}>
+                  {/* --- New Image Cell --- */}
+                  <TableCell>
+                    <div className="size-12 border rounded-md overflow-hidden">
+                      <InventoryImage url={product.photo_url} alt={product.barcode} />
+                    </div>
+                  </TableCell>
+                  {/* --- End New Image Cell --- */}
+
                   <TableCell className="font-mono text-sm">{product.barcode}</TableCell>
                   <TableCell className="font-medium">{product.vendor}</TableCell>
-                  
                   <TableCell>
                     <Badge variant="outline">{product.category}</Badge>
-                 </TableCell>
+                  </TableCell>
                   <TableCell>
                     <Badge variant="outline" className="mr-1">D: {product.displayStock}</Badge>
                     <Badge variant="outline" className="bg-gray-50">G: {product.godownStock}</Badge>
                   </TableCell>
                   <TableCell>₹{product.price.toLocaleString()}</TableCell>
                   <TableCell>
-                    {/* Combined stock for status badge */}
                     {(product.displayStock + product.godownStock) === 0 ? (
                       <Badge variant="destructive">Out</Badge>
                     ) : (
@@ -161,89 +190,5 @@ export function Inventory({ products }: InventoryProps) {
         </CardContent>
       </Card>
     </div>
-    // <div className="space-y-4">
-    //   {/* Bulk Action Header */}
-    //   {Object.keys(printSelection).length > 0 && (
-    //     <div className="flex items-center justify-between p-4 bg-blue-50 border border-blue-200 rounded-lg animate-in fade-in slide-in-from-top-2">
-    //       <p className="text-sm text-blue-800 font-medium">
-    //         {Object.keys(printSelection).length} products selected for printing
-    //       </p>
-    //       <button 
-    //         onClick={() => window.print()} 
-    //         className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-    //       >
-    //         Print {Object.values(printSelection).reduce((a, b) => a + b, 0)} Labels
-    //       </button>
-    //     </div>
-    //   )}
-
-    //   <Table>
-    //     <TableHeader>
-    //       <TableRow>
-    //         {/* New Selection Header */}
-    //         <TableHead className="w-12">Select</TableHead>
-    //         <TableHead>Barcode</TableHead>
-    //         <TableHead>Vendor</TableHead>
-    //         <TableHead>Stock (D/G)</TableHead>
-    //         <TableHead>Price</TableHead>
-    //         {/* New Quantity Header */}
-    //         <TableHead className="w-24 text-center">Print Qty</TableHead>
-    //       </TableRow>
-    //     </TableHeader>
-    //     <TableBody>
-    //       {filteredProducts.map((product) => {
-    //         const isSelected = !!printSelection[product.id];
-    //         return (
-    //           <TableRow key={product.id} className={isSelected ? "bg-blue-50/50" : ""}>
-    //             <TableCell>
-    //               <input
-    //                 type="checkbox"
-    //                 checked={isSelected}
-    //                 onChange={() => toggleSelection(product.id)}
-    //                 className="size-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-    //               />
-    //             </TableCell>
-    //             <TableCell className="font-mono text-sm">{product.barcode}</TableCell>
-    //             <TableCell className="font-medium">{product.vendor}</TableCell>
-    //             <TableCell>
-    //               <Badge variant="outline" className="mr-1">D: {product.displayStock}</Badge>
-    //               <Badge variant="outline" className="bg-gray-50">G: {product.godownStock}</Badge>
-    //             </TableCell>
-    //             <TableCell>₹{product.price.toLocaleString()}</TableCell>
-    //             <TableCell>
-    //               <Input
-    //                 type="number"
-    //                 min="1"
-    //                 disabled={!isSelected}
-    //                 value={printSelection[product.id] || ""}
-    //                 onChange={(e) => updateQty(product.id, parseInt(e.target.value))}
-    //                 className={`h-8 w-20 mx-auto text-center ${!isSelected ? 'opacity-30' : 'bg-white'}`}
-    //               />
-    //             </TableCell>
-    //           </TableRow>
-    //         );
-    //       })}
-    //     </TableBody>
-    //   </Table>
-    //         {/* Hidden on screen, visible during print */}
-    //   <div id="print-area" className="hidden print:block">
-    //     {Object.entries(printSelection).map(([id, qty]) => {
-    //       const p = products.find(prod => prod.id === id);
-    //       if (!p) return null;
-          
-    //       return Array.from({ length: qty }).map((_, index) => (
-    //         <div key={`${id}-${index}`} className="label-break flex flex-col items-center justify-center border-none">
-    //           <h2 className="text-lg font-bold uppercase">{p.vendor}</h2>
-    //           {/* Assuming you have a Barcode component or library installed */}
-    //           <div className="py-2">
-    //             {/* Replace this with your actual <Barcode /> component */}
-    //             <p className="font-mono text-2xl tracking-widest">{p.barcode}</p> 
-    //           </div>
-    //           <p className="text-md font-semibold">₹{p.price.toLocaleString()}</p>
-    //         </div>
-    //       ));
-    //     })}
-    //   </div>
-    // </div>
   );
 }

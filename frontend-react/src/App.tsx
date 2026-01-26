@@ -76,7 +76,7 @@ export default function App() {
       godownStock: item.qty_godown || 0,   // Separate Godown
       stock: (item.qty_display || 0) + (item.qty_godown || 0), // Total sum
       category: item.category_name || "General",
-      image: item.photo_url,
+      photo_url: item.photo_url,
       name: item.item_code
     }));
     
@@ -215,7 +215,7 @@ export default function App() {
           godownStock: item.qty_godown || 0,   // Added
           stock: (item.qty_display || 0) + (item.qty_godown || 0),
           category: item.category_name || "General", // Added
-          image: item.photo_url
+          photo_url: item.photo_url
         };
         
         setSearchResult(foundProduct);

@@ -29,7 +29,7 @@ export interface Product {
   godownStock: number;
   stock: number;
   category: string;
-  image?: string;
+  photo_url?: string | null;
 }
 
 export function Scanner({ products, onAddToCart, onProductSearch, searchResult }: ScannerProps) {
