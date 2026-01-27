@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { ShoppingCart, Package, FileText, Scan, FileCheck } from "lucide-react";
+import { ShoppingCart, Package, FileText, Scan, FileCheck, Home} from "lucide-react";
 import { Scanner, Product } from "./components/Scanner";
 import { Inventory } from "./components/Inventory";
 import { Orders, Order } from "./components/Orders";
@@ -19,15 +19,18 @@ import {
 } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
 import { GlobalLoader } from "./components/Loader"; 
+import { supabase } from "./lib/supabaseClient"; // Ensure you have this file
+import LoginForm from "./components/auth/LoginForm";
+import HomeScreen from "./components/HomeScreen";
 
 // 1. Hardcode your preferred Shop ID here for now
 const PRESELECTED_SHOP_ID = "102e6445-6462-4cb6-bcbf-e9dd43a70b7e";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
-type View = "scanner" | "inventory" | "orders" | "cart" | "proforma";
+type View = "home" | "scanner" | "inventory" | "orders" | "cart" | "proforma";
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<View>("scanner");
+  //const [currentView, setCurrentView] = useState<View>("scanner");
   const [clientCarts, setClientCarts] = useState<ClientCart[]>([]);
   const [activeCartId, setActiveCartId] = useState<string | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -37,10 +40,122 @@ export default function App() {
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
   const [newClientName, setNewClientName] = useState("");
   const [editingPI, setEditingPI] = useState<ProformaInvoice | null>(null);
-
   // Compute proformaOrders from orders to ensure it's always in sync
   const proformaOrders = orders.filter(o => o.status === 'pi');
   const [isLoading, setIsLoading] = useState(false);
+  const [session, setSession] = useState<any>(null);
+  const [initializing, setInitializing] = useState(true);
+  // Keep your existing View state, but we'll add a "home" view
+  const [currentView, setCurrentView] = useState<View | "home">("home");
+  const [inventoryLoaded, setInventoryLoaded] = useState(false);
+  const [activeCartLoaded, setActiveCartLoaded] = useState(false);
+  const [ordersLoaded, setOrdersLoaded] = useState(false);
+
+    useEffect(() => {
+      // 1. Initial Session Check
+      // This runs once when the app loads to see if the user is already logged in
+      const checkInitialSession = async () => {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          setSession(session);
+        } catch (error) {
+          console.error("Error checking session:", error);
+        } finally {
+          // Once we have checked (success or fail), we stop the loading state
+          setInitializing(false);
+        }
+      };
+
+      checkInitialSession();
+
+      // 2. Auth State Listener
+      // This is vital for the Invitation Flow. When a user clicks the email link,
+      // Supabase updates the auth state, and this listener detects it to log them in.
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        setSession(session);
+        
+        // Optional: If you want to automatically redirect to home on login
+        if (session) {
+          setCurrentView("home");
+        }
+      });
+
+      // 3. Cleanup
+      // Unsubscribe from the listener when the component unmounts to prevent memory leaks
+      return () => {
+        subscription.unsubscribe();
+      };
+    }, []);
+
+    // NEW: Data Fetching Effect
+    useEffect(() => {
+      // Only fetch data if we have an active session
+      if (!session) return;
+
+      const loadData = async () => {
+        switch (currentView) {
+          case "inventory":
+            await handleLoadInventory();
+            break;
+          case "cart":
+            await handleLoadActiveCarts();
+            break;
+          case "proforma":
+            await handleLoadProformaInvoices();
+            break;
+          case "orders":
+            try {
+              const data = await apiCall(`${API_BASE_URL}/orders/list/${PRESELECTED_SHOP_ID}`);
+              
+              const mappedOrders: Order[] = data.map((o: any) => ({
+                id: o.id,
+                orderNumber: o.id.slice(0, 8).toUpperCase(), // Using ID snippet as Order #
+                customerName: o.client_name || "Unknown",
+                total: o.final_total || 0,
+                status: o.status,
+                date: new Date(o.created_at).toLocaleDateString(),
+                discount: o.discount_percent || 0
+              }));
+              
+              setOrders(mappedOrders);
+            } catch (error) {
+              console.error("Failed to load orders:", error);
+            }
+            break;
+          default:
+            // 'home' or 'scanner' might not need an initial API call
+            break;
+        }
+      };
+
+      loadData();
+    }, [currentView, session]); // This effect "watches" these two variables
+
+    // useEffect(() => {
+    //   const fetchOrders = async () => {
+    //     try {
+    //       const data = await apiCall(`${API_BASE_URL}/orders/list/${PRESELECTED_SHOP_ID}`);
+          
+    //       const mappedOrders: Order[] = data.map((o: any) => ({
+    //         id: o.id,
+    //         orderNumber: o.id.slice(0, 8).toUpperCase(), // Using ID snippet as Order #
+    //         customerName: o.client_name || "Unknown",
+    //         total: o.final_total || 0,
+    //         status: o.status,
+    //         date: new Date(o.created_at).toLocaleDateString(),
+    //         discount: o.discount_percent || 0
+    //       }));
+          
+    //       setOrders(mappedOrders);
+    //     } catch (error) {
+    //       console.error("Failed to load orders:", error);
+    //     }
+    //   };
+
+    //   if (currentView === "orders") {
+    //     fetchOrders();
+    //   }
+    // }, [currentView]); // Re-fetch when entering the orders view
 
   const apiCall = async (url: string, options?: RequestInit) => {
     setIsLoading(true);
@@ -58,10 +173,6 @@ export default function App() {
       setIsLoading(false);
     }
   };
-
-  const [inventoryLoaded, setInventoryLoaded] = useState(false);
-  const [activeCartLoaded, setActiveCartLoaded] = useState(false);
-  const [ordersLoaded, setOrdersLoaded] = useState(false);
 
   // On-demand: Load inventory when button is clicked
   const handleLoadInventory = async () => {
@@ -168,35 +279,6 @@ export default function App() {
     }
   };
 
-
-  //   try {
-  //     const item = await apiCall(`${API_BASE_URL}/product/by-code?item_code=${encodeURIComponent(code)}`);
-      
-  //     if (item && !item.error) {
-  //       // Map backend item to Product interface
-  //       const foundProduct: Product = {
-  //         id: item.id,
-  //         barcode: item.item_code,
-  //         name: item.item_code,
-  //         vendor: item.vendor_name || "-",
-  //         price: item.selling_price,
-  //         displayStock: item.qty_display || 0,
-  //         godownStock: item.qty_godown || 0,
-  //         stock: (item.qty_display || 0) + (item.qty_godown || 0),
-  //         category: item.category_name || "General",
-  //         image: item.photo_url
-  //       };
-        
-  //       setSearchResult(foundProduct);
-  //     } else {
-  //       toast.error("Product code not found in database");
-  //     }
-  //   } catch (error) {
-  //     console.error("Search error:", error);
-  //     toast.error("Error connecting to server");
-  //   }
-  // };
-
     const handleProductSearch = async (code: string) => {
     if (!code.trim()) return;
     
@@ -234,12 +316,6 @@ export default function App() {
 
   const activeCart = clientCarts.find((cart) => cart.id === activeCartId);
 
-    // Inside App.tsx
-
-
-  
-
-    // Inside src/App.tsx
   const handleAddToCart = async (product: Product) => {
     // 1. If no active cart, show dialog to select or create cart
     if (!activeCartId) {
@@ -293,58 +369,6 @@ export default function App() {
     }
   };
 
-  // const handleCreateCart = async (clientName: string) => {
-  //   try {
-  //     const data = await apiCall(`${API_BASE_URL}/basket/create`, {
-  //       method: "POST",
-  //       headers: { "Content-Type": "application/json" },
-  //       body: JSON.stringify({
-  //         shop_id: PRESELECTED_SHOP_ID,
-  //         client_name: clientName,
-  //         initial_product_id: pendingProduct?.id
-  //       }),
-  //     });
-
-  //     const newCart: ClientCart = {
-  //       id: data.order_id, // Use the real UUID from the DB
-  //       clientName: data.client_name,
-  //       items: [],
-  //       createdAt: new Date().toISOString(),
-  //       discount: 0,
-  //     };
-
-  //     setClientCarts((prev) => [...prev, newCart]);
-  //     setActiveCartId(data.order_id);
-  //     setPendingProduct(null); // Clear the pending state
-  //     toast.success(`Session started for ${clientName}`);
-
-  //     // If there was a pending product (the one that triggered the dialog), add it now
-  //     if (pendingProduct) {
-  //       //handleAddToCart(pendingProduct);
-  //       setClientCarts((prev) =>
-  //         prev.map((cart) => {
-  //           if (cart.id !== data.order_id) return cart;
-  //           return {
-  //             ...cart,
-  //             items: [
-  //               { 
-  //                 id: pendingProduct.id, 
-  //                 name: pendingProduct.name, 
-  //                 price: pendingProduct.price, 
-  //                 quantity: 1, 
-  //                 stock: pendingProduct.stock 
-  //               }
-  //             ],
-  //           };
-  //         })
-  //       );
-  //       toast.success(`Added ${pendingProduct.name} to ${clientName}'s cart`);
-  //       setPendingProduct(null);
-  //     }
-  //   } catch (error) {
-  //     toast.error("Failed to initialize session");
-  //   }
-  // };
 
   const handleCreateCart = async (clientName: string) => {
     try {
@@ -589,32 +613,6 @@ export default function App() {
       console.error("Failed to load items:", error);
     }
   };
-  
-  useEffect(() => {
-    const fetchOrders = async () => {
-      try {
-        const data = await apiCall(`${API_BASE_URL}/orders/list/${PRESELECTED_SHOP_ID}`);
-        
-        const mappedOrders: Order[] = data.map((o: any) => ({
-          id: o.id,
-          orderNumber: o.id.slice(0, 8).toUpperCase(), // Using ID snippet as Order #
-          customerName: o.client_name || "Unknown",
-          total: o.final_total || 0,
-          status: o.status,
-          date: new Date(o.created_at).toLocaleDateString(),
-          discount: o.discount_percent || 0
-        }));
-        
-        setOrders(mappedOrders);
-      } catch (error) {
-        console.error("Failed to load orders:", error);
-      }
-    };
-
-    if (currentView === "orders") {
-      fetchOrders();
-    }
-  }, [currentView]); // Re-fetch when entering the orders view
 
   const updateCartTax = (cartId: string | null, newTax: number | "") => {
     const taxValue = newTax === "" ? 18 : newTax; // Default to 18 if empty
@@ -731,72 +729,72 @@ export default function App() {
     );
   };
 
+  // Handle Loading State
+  if (initializing) return <GlobalLoader />;
+
+  // IF NOT LOGGED IN -> Show Login Page
+  if (!session) {
+    return <LoginForm />;
+  }
+
+  // 2. HOME VIEW CHECK (Add this block)
+  if (currentView === "home") {
+    return (
+      <>
+        <Toaster />
+        <HomeScreen onNavigate={(view: any) => setCurrentView(view)} />
+      </>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Toaster />
 
       {isLoading && <GlobalLoader />}
 
-      {/* Header */}
-      <header className="bg-white border-b sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <h1 className="text-2xl">The Light Code</h1>
-            <div className="flex gap-2">
-              <Button
-                variant={currentView === "scanner" ? "default" : "outline"}
-                onClick={() => setCurrentView("scanner")}
-              >
-                <Scan className="size-4 mr-2" />
-                Scanner
-              </Button>
-              <Button
-                variant={currentView === "inventory" ? "default" : "outline"}
-                onClick={async () => {
-                  await handleLoadInventory();
-                  setCurrentView("inventory");
-                }}
-              >
-                <Package className="size-4 mr-2" />
-                Inventory
-              </Button>
-              <Button
-                variant={currentView === "orders" ? "default" : "outline"}
-                onClick={() => setCurrentView("orders")}
-              >
-                <FileText className="size-4 mr-2" />
-                Orders
-              </Button>
-              <Button
-                variant={currentView === "cart" ? "default" : "outline"}
-                onClick={async () => {
-                  await handleLoadActiveCarts();
-                  setCurrentView("cart");
-                }}
-                className="relative"
-              >
-                <ShoppingCart className="size-4 mr-2" />
-                Carts
-                {clientCarts.length > 0 && (
-                  <Badge className="absolute -top-2 -right-2 size-6 flex items-center justify-center p-0 rounded-full">
-                    {clientCarts.length}
-                  </Badge>
-                )}
-              </Button>
-              <Button
-                variant={currentView === "proforma" ? "default" : "outline"}
-                onClick={async () => {
-                  await handleLoadProformaInvoices();
-                  setCurrentView("proforma");
-                }}
-              >
-                <FileCheck className="size-4 mr-2" />
-                Proforma Invoices
-              </Button>
+      {/* 1. THE HOMESCREEN VIEW: No header, full-screen dashboard */}
+      {currentView === "home" ? (
+        <HomeScreen 
+          onNavigate={(view) => setCurrentView(view)} 
+          cartCount={clientCarts.length} 
+        />
+      ) : (
+        /* 2. THE MODULE VIEW: Clean header + specific content */
+        <>
+          <header className="bg-white border-b sticky top-0 z-50">
+            <div className="max-w-7xl mx-auto px-6 py-4">
+              <div className="flex items-center justify-between">
+                {/* Left Side: The only way back and the current context */}
+                <div className="flex items-center gap-4">
+                  <Button
+                    variant="ghost"
+                    onClick={() => setCurrentView("home")}
+                    className="text-gray-600 hover:text-blue-600 transition-colors px-2"
+                  >
+                    <Home className="size-5 mr-2" />
+                    <span className="font-semibold">Dashboard</span>
+                  </Button>
+                  <div className="h-6 w-px bg-gray-200" />
+                  <h1 className="text-xl font-bold text-gray-900 capitalize">
+                    {currentView === 'proforma' ? 'Proforma Invoices' : currentView}
+                  </h1>
+                </div>
+
+                {/* Right Side: Keep only essential global actions if needed, otherwise empty */}
+                <div className="flex items-center gap-4">
+                   {/* Optional: User initials or a simplified cart indicator */}
+                   {currentView !== 'cart' && clientCarts.length > 0 && (
+                     <Button variant="outline" size="sm" onClick={() => setCurrentView('cart')} className="rounded-full">
+                        <ShoppingCart className="size-4 mr-2" />
+                        {clientCarts.length} Active
+                     </Button>
+                   )}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      </header>
+          </header>
+
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-8">
@@ -869,6 +867,8 @@ export default function App() {
           />
         )}
       </main>
+      </>
+      )}
 
       {/* Client Selection Dialog */}
       <Dialog open={showClientDialog} onOpenChange={setShowClientDialog}>
@@ -934,6 +934,7 @@ export default function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
     </div>
   );
 }
