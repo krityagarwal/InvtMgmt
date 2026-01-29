@@ -1410,3 +1410,24 @@ html {
   syntax: "*";
   inherits: false
 }
+
+/* Ensure the scanner buttons and text are visible */
+#reader button {
+  /* Use the ! prefix at the start of Tailwind classes for importance */
+  @apply !bg-blue-600 !text-white !px-4 !py-2 !rounded-md !mb-2 !cursor-pointer;
+  /* Standard CSS properties that don't have a direct @apply equivalent with ! */
+  border: none !important;
+}
+
+#reader img {
+  display: none !important; /* Hides the scan-image-file fallback icon */
+}
+
+#reader video {
+  /* Apply importance to each layout utility */
+  @apply !rounded-lg !w-full !object-cover;
+}
+
+#reader__dashboard_section_csr button {
+  @apply !mt-4;
+}

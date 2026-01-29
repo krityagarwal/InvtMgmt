@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Camera } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { Camera, Search } from "lucide-react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -32,81 +32,106 @@ export interface Product {
   photo_url?: string | null;
 }
 
-export function Scanner({ products, onAddToCart, onProductSearch, searchResult }: ScannerProps) {
-  const [scanValue, setScanValue] = useState("");
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
-
-  // function to start the scanner only when the div is guaranteed to exist
-  const startScanner = () => {
+// Sub-component to handle the lifecycle of the actual camera
+function CameraScanner({ onScan, onClose }: { onScan: (text: string) => void; onClose: () => void }) {
+  useEffect(() => {
     const scanner = new Html5QrcodeScanner(
       "reader",
-      { fps: 10, qrbox: { width: 250, height: 180 } },
-      false
+      { 
+        fps: 10, 
+        qrbox: { width: 250, height: 180 },
+        aspectRatio: 1.0 
+      },
+      /* verbose= */ false
     );
 
     scanner.render(
       (text) => {
-        onProductSearch(text); //
-        scanner.clear(); // Stop camera on success
-        setIsCameraOpen(false); // Close dialog
+        onScan(text);
+        scanner.clear().catch(err => console.error("Failed to clear scanner", err));
       },
-      () => { /* ignore frame errors */ }
+      () => { /* frame errors ignored */ }
     );
+
+    // Cleanup function: Stops camera when the Dialog closes
+    return () => {
+      scanner.clear().catch(err => console.error("Cleanup failed", err));
+    };
+  }, [onScan]);
+
+  return <div id="reader" className="w-full"></div>;
+}
+
+export function Scanner({ onAddToCart, onProductSearch, searchResult }: ScannerProps) {
+  const [scanValue, setScanValue] = useState("");
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+
+  const handleManualSearch = () => {
+    if (scanValue.trim()) {
+      onProductSearch(scanValue);
+    }
   };
 
   return (
     <div className="space-y-4">
       <div className="flex gap-2">
-        <Input
-          placeholder="Type or scan code..."
-          value={scanValue}
-          onChange={(e) => setScanValue(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && onProductSearch(scanValue)}
-        />
-        <Button onClick={() => setIsCameraOpen(true)}>
+        <div className="relative flex-1">
+          <Input
+            placeholder="Type or scan code..."
+            value={scanValue}
+            onChange={(e) => setScanValue(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleManualSearch()}
+            className="pr-10"
+          />
+          <Search 
+            className="absolute right-3 top-1/2 -translate-y-1/2 size-4 text-gray-400 cursor-pointer" 
+            onClick={handleManualSearch}
+          />
+        </div>
+        <Button onClick={() => setIsCameraOpen(true)} variant="outline">
           <Camera className="mr-2 size-4" /> Camera
         </Button>
       </div>
 
       {searchResult && (
-        <div className="p-4 border rounded-lg bg-blue-50/50 flex justify-between items-center animate-in fade-in zoom-in-95">
+        <div className="p-4 border rounded-lg bg-blue-50/50 flex justify-between items-center animate-in fade-in slide-in-from-top-2">
           <div>
-            <h3 className="font-bold text-lg">{searchResult.name}</h3>
-            <p className="text-sm text-gray-500">Code: {searchResult.barcode}</p>
-            <p className="font-semibold mt-1">₹{searchResult.price.toLocaleString()}</p>
+            <h3 className="font-bold text-lg text-gray-900">{searchResult.name}</h3>
+            <p className="text-sm text-gray-500">SKU: {searchResult.barcode}</p>
+            <p className="font-bold text-blue-600 mt-1">₹{searchResult.price.toLocaleString()}</p>
           </div>
-         {/* Only show/enable button if total stock > 0 */}
-        {(searchResult.displayStock + searchResult.godownStock) > 0 ? (
-          <Button onClick={() => onAddToCart(searchResult)}>
-            Add to Cart
-          </Button>
-        ) : (
-          <Badge variant="destructive">Out of Stock</Badge>
-        )}
+          {(searchResult.displayStock + searchResult.godownStock) > 0 ? (
+            <Button onClick={() => onAddToCart(searchResult)} className="bg-blue-600 hover:bg-blue-700">
+              Add to Cart
+            </Button>
+          ) : (
+            <Badge variant="destructive" className="px-4 py-1">Out of Stock</Badge>
+          )}
         </div>
       )}
 
       <Dialog open={isCameraOpen} onOpenChange={setIsCameraOpen}>
-        <DialogContent 
-          onOpenAutoFocus={(e) => {
-            e.preventDefault(); // Prevents focus theft
-            startScanner();     // Trigger scanner when DOM is fully ready
-          }}
-        >
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Camera Scanner</DialogTitle>
-            {/* Fixes the "Missing Description" warning */}
+            <DialogTitle>Scan Item Barcode</DialogTitle>
             <DialogDescription>
-              Align the barcode within the box below.
+              Hold the barcode steady in front of the camera.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="bg-black rounded-md overflow-hidden min-h-[300px]">
-            {/* The library looks for this specific ID */}
-            <div id="reader" className="w-full"></div>
+          <div className="bg-slate-950 rounded-lg overflow-hidden border border-slate-800">
+            {isCameraOpen && (
+              <CameraScanner 
+                onScan={(text) => {
+                  onProductSearch(text);
+                  setIsCameraOpen(false);
+                }} 
+                onClose={() => setIsCameraOpen(false)}
+              />
+            )}
           </div>
 
-          <Button variant="outline" onClick={() => setIsCameraOpen(false)} className="w-full">
+          <Button variant="ghost" onClick={() => setIsCameraOpen(false)} className="w-full text-gray-500">
             Cancel
           </Button>
         </DialogContent>
