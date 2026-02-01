@@ -89,65 +89,62 @@ export function Inventory({ products }: InventoryProps) {
     return printSelection[id] !== undefined;
   });
   const selectedCount = Object.keys(printSelection).length;
-
+//working on web , keep is everything else fails
 const handlePrintLabels = () => {
   const printContent = document.getElementById('hidden-print-factory');
   if (!printContent) return;
 
-  const iframe = document.createElement('iframe');
-  iframe.style.position = 'fixed';
-  iframe.style.opacity = '0';
-  document.body.appendChild(iframe);
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    alert("Please allow pop-ups to print labels.");
+    return;
+  }
 
-  const doc = iframe.contentWindow?.document;
-  if (!doc) return;
-
+  // Define critical styles for the A4 Grid
   const gridStyles = `
-    @page { 
-      size: A4; 
-      margin: 10mm; 
-    }
-    body { 
-      margin: 0; 
-      padding: 0; 
-      font-family: sans-serif; 
-    }
-    .a4-grid-container {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr); /* 3 Columns */
-      gap: 10px;
+    @page { size: A4; margin: 10mm; }
+    body { margin: 0; padding: 10px; font-family: sans-serif; background: white !important; }
+    .a4-grid-container { 
+      display: grid; 
+      grid-template-columns: repeat(3, 1fr); 
+      gap: 15px; 
       width: 100%;
     }
-    .a4-label-item {
-      width: 60mm; 
-      height: 50mm; 
-      border: 1px dashed #ccc; /* Cut lines for hanging */
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 5px;
+    .a4-label-item { 
+      width: 60mm; height: 50mm; 
+      border: 1px dashed #ccc; 
+      display: flex; flex-direction: column; 
+      align-items: center; justify-content: center; 
       page-break-inside: avoid;
     }
-    .vendor-name { font-size: 12px; font-weight: bold; margin: 0; text-transform: uppercase; }
-    .qr-wrapper { margin: 5px 0; }
-    .barcode-text { font-size: 10px; font-family: monospace; margin: 0; }
-    svg { display: block; margin: 0 auto; }
+    .qr-img { width: 80px; height: 80px; object-fit: contain; }
+    .qr-placeholder { width: 80px; height: 80px; background: #f3f4f6; }
+    .barcode-text { font-size: 10px; color: #666; margin-top: 4px; }
+    .price-text { font-size: 14px; font-weight: 900; margin-top: 2px; }
   `;
 
-  doc.open();
-  doc.write('<html><head><style>' + gridStyles + '</style></head><body>');
-  doc.write(printContent.innerHTML);
-  doc.write('</body></html>');
-  doc.close();
-
-  setTimeout(() => {
-    iframe.contentWindow?.focus();
-    iframe.contentWindow?.print();
-    document.body.removeChild(iframe);
-  }, 500);
+  printWindow.document.write(`
+    <html>
+      <head>
+        <title>Inventory Labels</title>
+        <style>${gridStyles}</style>
+      </head>
+      <body>
+        ${printContent.innerHTML}
+        <script>
+          window.onload = () => {
+            // Extra safety to ensure image data is decoded
+            setTimeout(() => {
+              window.print();
+              // window.close(); 
+            }, 750);
+          };
+        </script>
+      </body>
+    </html>
+  `);
+  printWindow.document.close();
 };
-
   return (
     <div className="space-y-6">
       {/* Stats Overview */}
@@ -290,7 +287,6 @@ const handlePrintLabels = () => {
             const qty = printSelection[String(product.id)] || 1;
             return Array.from({ length: qty }).map((_, i) => (
               <div key={`${product.id}-${i}`} className="a4-label-item">
-                <p className="vendor-name">{product.vendor}</p>
                 <div className="qr-wrapper">
                   <QRCode value={product.barcode} size={100} level="H" />
                 </div>
