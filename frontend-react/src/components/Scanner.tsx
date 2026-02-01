@@ -93,7 +93,7 @@ export function Scanner({ onAddToCart, onProductSearch, searchResult }: ScannerP
         </Button>
       </div>
 
-      {searchResult && (
+      {/* {searchResult && (
         <div className="p-4 border rounded-lg bg-blue-50/50 flex justify-between items-center animate-in fade-in slide-in-from-top-2">
           <div>
             <h3 className="font-bold text-lg text-gray-900">{searchResult.name}</h3>
@@ -106,6 +106,35 @@ export function Scanner({ onAddToCart, onProductSearch, searchResult }: ScannerP
             </Button>
           ) : (
             <Badge variant="destructive" className="px-4 py-1">Out of Stock</Badge>
+          )}
+        </div>
+      )} */}
+
+      {searchResult && (
+        <div className="p-3 border rounded-lg bg-blue-50/50 flex items-center justify-between gap-4 animate-in fade-in zoom-in-95">
+          {/* Product Info & Stock */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline gap-2 mb-1">
+              <h3 className="font-bold text-gray-900 truncate">{searchResult.name}</h3>
+              <span className="text-[10px] text-gray-400 font-mono">#{searchResult.barcode}</span>
+            </div>
+            
+            <div className="flex items-center gap-3 text-xs">
+              <span className="font-bold text-blue-700">₹{searchResult.price.toLocaleString()}</span>
+              <div className="flex gap-2 border-l pl-3 border-blue-200">
+                <span className="text-gray-500">Disp: <b className={searchResult.displayStock > 0 ? "text-gray-900" : "text-red-500"}>{searchResult.displayStock}</b></span>
+                <span className="text-gray-500">God: <b className={searchResult.godownStock > 0 ? "text-gray-900" : "text-red-500"}>{searchResult.godownStock}</b></span>
+              </div>
+            </div>
+          </div>
+
+          {/* Action Button */}
+          {(searchResult.displayStock + searchResult.godownStock) > 0 ? (
+            <Button size="sm" onClick={() => onAddToCart(searchResult)} className="shrink-0 bg-blue-600">
+              Add
+            </Button>
+          ) : (
+            <Badge variant="destructive" className="shrink-0">Out of Stock</Badge>
           )}
         </div>
       )}

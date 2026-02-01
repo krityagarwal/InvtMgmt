@@ -1431,3 +1431,37 @@ html {
 #reader__dashboard_section_csr button {
   @apply !mt-4;
 }
+
+/* Styling the "Request Camera Permissions" button to look professional */
+#reader__camera_permission_button {
+  @apply !bg-blue-600 !text-white !px-6 !py-2 !rounded-lg !font-semibold !mt-4 !shadow-md !cursor-pointer;
+  border: none !important;
+  transition: background-color 0.2s;
+}
+
+#reader__camera_permission_button:hover {
+  background-color: #1d4ed8 !important; /* A slightly darker blue on hover */
+}
+
+@media print {
+  /* Hide the main app root ONLY */
+  #root, 
+  .main-app-container { 
+    display: none !important; 
+  }
+
+  /* Force the print factory to be the only thing existing */
+  #hidden-print-factory {
+    display: block !important;
+    visibility: visible !important;
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+  }
+
+  /* Reset body for the printer */
+  body {
+    background-color: white !important;
+  }
+}
