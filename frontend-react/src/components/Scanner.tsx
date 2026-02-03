@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Camera, Search } from "lucide-react";
 import { Html5QrcodeScanner } from "html5-qrcode";
+import { Html5Qrcode } from "html5-qrcode";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Badge } from "./ui/badge";
@@ -33,33 +34,74 @@ export interface Product {
 }
 
 // Sub-component to handle the lifecycle of the actual camera
+// function CameraScanner({ onScan, onClose }: { onScan: (text: string) => void; onClose: () => void }) {
+//   useEffect(() => {
+//     const scanner = new Html5QrcodeScanner(
+//       "reader",
+//       { 
+//         fps: 10, 
+//         qrbox: { width: 250, height: 180 },
+//         aspectRatio: 1.0 
+//       },
+//       /* verbose= */ false
+//     );
+
+//     scanner.render(
+//       (text) => {
+//         onScan(text);
+//         scanner.clear().catch(err => console.error("Failed to clear scanner", err));
+//       },
+//       () => { /* frame errors ignored */ }
+//     );
+
+//     // Cleanup function: Stops camera when the Dialog closes
+//     return () => {
+//       scanner.clear().catch(err => console.error("Cleanup failed", err));
+//     };
+//   }, [onScan]);
+
+//   return <div id="reader" className="w-full"></div>;
+// }
+
 function CameraScanner({ onScan, onClose }: { onScan: (text: string) => void; onClose: () => void }) {
   useEffect(() => {
-    const scanner = new Html5QrcodeScanner(
-      "reader",
-      { 
-        fps: 10, 
-        qrbox: { width: 250, height: 180 },
-        aspectRatio: 1.0 
-      },
-      /* verbose= */ false
-    );
+    // Create the instance
+    const html5QrCode = new Html5Qrcode("reader");
 
-    scanner.render(
-      (text) => {
-        onScan(text);
-        scanner.clear().catch(err => console.error("Failed to clear scanner", err));
-      },
-      () => { /* frame errors ignored */ }
-    );
+    const startScanner = async () => {
+      try {
+        await html5QrCode.start(
+          { facingMode: "environment" }, // FORCES THE BACK CAMERA
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 180 },
+            aspectRatio: 1.0,
+          },
+          (decodedText) => {
+            onScan(decodedText);
+            // Successfully scanned - the scanner is cleared in the cleanup
+          },
+          () => { /* Frame errors ignored */ }
+        );
+      } catch (err) {
+        console.error("Failed to start back camera scanner", err);
+      }
+    };
 
-    // Cleanup function: Stops camera when the Dialog closes
+    startScanner();
+
+    // Cleanup function: Physically releases the camera back to the phone
     return () => {
-      scanner.clear().catch(err => console.error("Cleanup failed", err));
+      if (html5QrCode.isScanning) {
+        html5QrCode.stop()
+          .then(() => html5QrCode.clear())
+          .catch((err) => console.error("Scanner cleanup failed", err));
+      }
     };
   }, [onScan]);
 
-  return <div id="reader" className="w-full"></div>;
+  // Styling the 'reader' div is important for mobile fit
+  return <div id="reader" className="w-full overflow-hidden rounded-md"></div>;
 }
 
 export function Scanner({ onAddToCart, onProductSearch, searchResult }: ScannerProps) {
