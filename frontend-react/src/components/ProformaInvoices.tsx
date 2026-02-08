@@ -13,6 +13,7 @@ import {
   TableRow,
 } from "./ui/table";
 import { OrderDetailsView } from "./ui/OrderDetailsView";
+import { Product } from "./Scanner";
 
 export interface ProformaInvoice {
   id: string;
@@ -25,6 +26,7 @@ export interface ProformaInvoice {
   updatedAt: string;
   notes?: string;
   subtotal?: number;
+  paidAmount: number;
   discount_amount?: number;
   discount_percent?: number;
   tax_percent?: number;
@@ -35,6 +37,7 @@ export interface ProformaInvoice {
 
 interface ProformaInvoicesProps {
   invoices: ProformaInvoice[];
+  products: Product[];
   onEditPI: (pi: ProformaInvoice) => void;
   onConvertToOrder: (pi: any) => void;
   onDeletePI: (piId: string) => void;
@@ -44,6 +47,7 @@ interface ProformaInvoicesProps {
 
 export function ProformaInvoices({ 
   invoices, 
+  products,
   onEditPI, 
   onConvertToOrder, 
   onDeletePI,
@@ -218,6 +222,7 @@ export function ProformaInvoices({
         <CardContent>
           <PITable 
             invoices={invoices}
+            products={products}
             expandedPIId={expandedPIId}
             onToggleExpand={toggleExpand}
             onEditPI={onEditPI}
@@ -344,7 +349,19 @@ function PrintLayout({ pi }: { pi?: ProformaInvoice }) {
   );
 }
 
-function PITable({ invoices, expandedPIId, onToggleExpand, onEditPI, onConvertToOrder, onDeletePI, onUpdateStatus, onFetchDetails, onSetDownloadPI, onSetPrintingPI }: any) {
+function PITable({ 
+  invoices, 
+  products= [], // 1. Added products prop for runtime check
+  expandedPIId, 
+  onToggleExpand, 
+  onEditPI, 
+  onConvertToOrder, 
+  onDeletePI, 
+  onUpdateStatus, 
+  onFetchDetails, 
+  onSetDownloadPI, 
+  onSetPrintingPI 
+}: any) {
   return (
     <Table>
       <TableHeader>
@@ -353,80 +370,131 @@ function PITable({ invoices, expandedPIId, onToggleExpand, onEditPI, onConvertTo
           <TableHead>PI #</TableHead>
           <TableHead>Client</TableHead>
           <TableHead>Status</TableHead>
+          <TableHead className="text-right">Total</TableHead>
+          <TableHead className="text-right">Paid</TableHead> 
           <TableHead className="text-right">Actions</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {invoices.map((pi: ProformaInvoice) => (
-          <React.Fragment key={pi.id}>
-            <TableRow className="cursor-pointer hover:bg-gray-50" onClick={() => onToggleExpand(pi.id)}>
-              <TableCell>
-                {expandedPIId === pi.id ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+        {invoices.map((pi: ProformaInvoice) => {
+          // Check the data structure immediately
+          console.log(`--- Checking PI: ${pi.piNumber} ---`);
+          console.log("Items available:", pi.items?.length || 0);
+          console.log("Full PI Object:", pi); // Inspect this in console to see if 'items' exists
+          // 2. Derive stock status at runtime
+          // We check if any item in the PI has a quantity greater than current master stock
+          const hasShortage = pi.items?.some(item => {
+            const masterProduct = products.find((p: any) => 
+              p.barcode?.toLowerCase().trim() === item.name?.toLowerCase().trim());
+            console.log(masterProduct)
+            if (!masterProduct) {
+              console.warn(`Could not find product in inventory: "${item.name}"`);
+              return false;
+            }
+            const availableStock = (masterProduct.displayStock || 0) + (masterProduct.godownStock || 0);
+            console.log(
+              `Item: ${item.name} | Req: ${item.quantity} | Available: ${availableStock} | Shortage: ${item.quantity > availableStock }`);
+            return item.quantity > availableStock;
+          });
+
+          return (
+            <React.Fragment key={pi.id}>
+              <TableRow className="cursor-pointer hover:bg-gray-50" onClick={() => onToggleExpand(pi.id)}>
+                <TableCell>
+                  {expandedPIId === pi.id ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+                </TableCell>
+                <TableCell className="font-mono text-sm">{pi.piNumber}</TableCell>
+                <TableCell className="font-medium">{pi.clientName}</TableCell>
+                <TableCell>
+                  <div className="flex flex-col gap-1.5 items-start">
+                    <Badge variant="outline" className="text-[10px]">{pi.status}</Badge>
+                    {/* 3. Visual Flag for Shortage */}
+                    {hasShortage && (
+                      <Badge className="bg-red-100 text-red-700 border-red-200 text-[9px]font-bold py-0 leading-tight">
+                        Stock Shortage
+                      </Badge>
+                    )}
+                  </div>
+                </TableCell>
+                {/* Total Column */}
+              <TableCell className="text-right font-medium">
+                ₹{(pi.total ?? 0).toLocaleString()}
               </TableCell>
-              <TableCell className="font-mono text-sm">{pi.piNumber}</TableCell>
-              <TableCell className="font-medium">{pi.clientName}</TableCell>
-              <TableCell><Badge variant="outline">{pi.status}</Badge></TableCell>
+
+              {/* Paid Amount Column */}
               <TableCell className="text-right">
-                <div className="flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onFetchDetails(pi.id);
-                      onSetDownloadPI(pi.id);
-                    }}
-                    title="Download PI as PDF"
-                  >
-                    <Download className="size-4" />
-                  </Button>
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onFetchDetails(pi.id);
-                      const latestPI = invoices.find((inv: ProformaInvoice) => inv.id === pi.id) || pi;
-                      onSetPrintingPI(latestPI);
-                    }}
-                    title="Print PI"
-                  >
-                    <Printer className="size-4" />
-                  </Button>
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onEditPI(pi);
-                    }}
-                  >
-                    <Edit className="size-4" />
-                  </Button>
-                  <Button variant="ghost" size="icon" onClick={() => onDeletePI(pi.id)}><Trash2 className="size-4 text-red-500" /></Button>
-                </div>
+                <span className={(pi.paidAmount ?? 0) > 0 ? "text-green-600 font-semibold" : "text-gray-400"}>
+                  ₹{(pi.paidAmount ?? 0).toLocaleString()}
+                </span>
               </TableCell>
-            </TableRow>
-            
-            {expandedPIId === pi.id && (
-              <TableRow>
-                <TableCell colSpan={5} className="bg-gray-50/50 p-0">
-                  <OrderDetailsView
-                    clientName={pi.clientName}
-                    date={pi.createdAt}
-                    items={pi.items || []}
-                    financial={pi}
-                    actions={
-                      <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => onConvertToOrder(pi)}>
-                        Convert to Sale
-                      </Button>
-                    }
-                  />
+                <TableCell className="text-right">
+                  <div className="flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onFetchDetails(pi.id);
+                        onSetDownloadPI(pi.id);
+                      }}
+                      title="Download PI as PDF"
+                    >
+                      <Download className="size-4" />
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onFetchDetails(pi.id);
+                        const latestPI = invoices.find((inv: ProformaInvoice) => inv.id === pi.id) || pi;
+                        onSetPrintingPI(latestPI);
+                      }}
+                      title="Print PI"
+                    >
+                      <Printer className="size-4" />
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onEditPI(pi);
+                      }}
+                    >
+                      <Edit className="size-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" onClick={() => onDeletePI(pi.id)}><Trash2 className="size-4 text-red-500" /></Button>
+                  </div>
                 </TableCell>
               </TableRow>
-            )}
-          </React.Fragment>
-        ))}
+              
+              {expandedPIId === pi.id && (
+                <TableRow>
+                  <TableCell colSpan={5} className="bg-gray-50/50 p-0">
+                    <OrderDetailsView
+                      clientName={pi.clientName}
+                      date={pi.createdAt}
+                      items={pi.items || []}
+                      financial={pi}
+                      actions={
+                        /* 4. Conditionally disable 'Convert to Sale' */
+                        <Button 
+                          size="sm" 
+                          className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300" 
+                          onClick={() => onConvertToOrder(pi)}
+                          disabled={hasShortage}
+                        >
+                          {hasShortage ? "Insufficient Stock" : "Convert to Sale"}
+                        </Button>
+                      }
+                    />
+                  </TableCell>
+                </TableRow>
+              )}
+            </React.Fragment>
+          );
+        })}
       </TableBody>
     </Table>
   );

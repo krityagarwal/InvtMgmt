@@ -38,6 +38,7 @@ export default function App() {
   const [searchResult, setSearchResult] = useState<Product | null>(null);
   const [showClientDialog, setShowClientDialog] = useState(false);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
+  const [pendingQuantity, setPendingQuantity] = useState<number>(1); // New state
   const [newClientName, setNewClientName] = useState("");
   const [editingPI, setEditingPI] = useState<ProformaInvoice | null>(null);
   // Compute proformaOrders from orders to ensure it's always in sync
@@ -91,14 +92,19 @@ export default function App() {
     useEffect(() => {
       // Only fetch data if we have an active session
       if (!session) return;
-
+      setSearchResult(null);     // Clears the scanner card
+      setPendingQuantity(1);     // Resets internal stepper
+      setNewClientName("");      // Clears dialog input
+      // -----------------------------
       const loadData = async () => {
         switch (currentView) {
           case "inventory":
             await handleLoadInventory();
             break;
           case "cart":
-            await handleLoadActiveCarts();
+            if (clientCarts.length === 0) {
+              await handleLoadActiveCarts();
+            }
             break;
           case "proforma":
             await handleLoadProformaInvoices();
@@ -114,7 +120,8 @@ export default function App() {
                 total: o.final_total || 0,
                 status: o.status,
                 date: new Date(o.created_at).toLocaleDateString(),
-                discount: o.discount_percent || 0
+                discount: o.discount_percent || 0,
+                paidAmount: o.paid_amount || 0
               }));
               
               setOrders(mappedOrders);
@@ -130,32 +137,6 @@ export default function App() {
 
       loadData();
     }, [currentView, session]); // This effect "watches" these two variables
-
-    // useEffect(() => {
-    //   const fetchOrders = async () => {
-    //     try {
-    //       const data = await apiCall(`${API_BASE_URL}/orders/list/${PRESELECTED_SHOP_ID}`);
-          
-    //       const mappedOrders: Order[] = data.map((o: any) => ({
-    //         id: o.id,
-    //         orderNumber: o.id.slice(0, 8).toUpperCase(), // Using ID snippet as Order #
-    //         customerName: o.client_name || "Unknown",
-    //         total: o.final_total || 0,
-    //         status: o.status,
-    //         date: new Date(o.created_at).toLocaleDateString(),
-    //         discount: o.discount_percent || 0
-    //       }));
-          
-    //       setOrders(mappedOrders);
-    //     } catch (error) {
-    //       console.error("Failed to load orders:", error);
-    //     }
-    //   };
-
-    //   if (currentView === "orders") {
-    //     fetchOrders();
-    //   }
-    // }, [currentView]); // Re-fetch when entering the orders view
 
   const apiCall = async (url: string, options?: RequestInit) => {
     setIsLoading(true);
@@ -174,19 +155,23 @@ export default function App() {
     }
   };
 
-  // On-demand: Load inventory when button is clicked
   const handleLoadInventory = async () => {
     const data = await apiCall(`${API_BASE_URL}/inventory/${PRESELECTED_SHOP_ID}`);
     
     const mappedProducts = data.map((item: any) => ({
       id: item.id,
       barcode: item.item_code,
-      vendor: item.vendor_name || "-", // Mapping vendor_name
+      vendor: item.vendor_name || "-",
       price: item.selling_price,
-      displayStock: item.qty_display || 0, // Separate Display
-      godownStock: item.qty_godown || 0,   // Separate Godown
-      stock: (item.qty_display || 0) + (item.qty_godown || 0), // Total sum
+      // Exact mapping from your API response
+      costPrice: item.cost_price || 0,
+      overheadPrice: item.overhead_expense || 0,
+      remark: item.remark || "-", 
+      displayStock: item.qty_display || 0,
+      godownStock: item.qty_godown || 0,
+      stock: (item.qty_display || 0) + (item.qty_godown || 0),
       category: item.category_name || "General",
+      createdAt: item.created_at, 
       photo_url: item.photo_url,
       name: item.item_code
     }));
@@ -226,7 +211,12 @@ export default function App() {
       });
 
       const loadedCarts = await Promise.all(cartPromises);
-      setClientCarts(loadedCarts);
+      //setClientCarts(loadedCarts);
+      setClientCarts((prev) => {
+        // Keep carts that are NOT in the incoming 'loadedCarts' list to avoid duplicates
+        const uniquePrev = prev.filter(p => !loadedCarts.some(l => l.id === p.id));
+        return [...uniquePrev, ...loadedCarts];
+      });
       setActiveCartLoaded(true);
     } catch (error) {
       console.error("Error loading active carts:", error);
@@ -247,7 +237,8 @@ export default function App() {
         status: o.status,
         date: new Date(o.created_at).toLocaleDateString(),
         discount: o.discount_percent || 0,
-        items: []
+        items: [],
+        paidAmount: o.paid_amount || 0
       }));
       
       setOrders(mappedOrders);
@@ -267,6 +258,7 @@ export default function App() {
         orderNumber: o.id.slice(0, 8).toUpperCase(),
         customerName: o.client_name || "Unknown",
         total: o.final_total || 0,
+        paidAmount: o.paid_amount || 0,
         status: o.status,
         date: new Date(o.created_at).toLocaleDateString(),
         discount: o.discount_percent || 0,
@@ -301,11 +293,6 @@ export default function App() {
         };
         
         setSearchResult(foundProduct);
-
-        // If a cart is already active, add it immediately for a seamless flow
-        if (activeCartId) {
-          handleAddToCart(foundProduct);
-        }
       } else {
         toast.error(`Product ${code} not found`);
       }
@@ -316,10 +303,11 @@ export default function App() {
 
   const activeCart = clientCarts.find((cart) => cart.id === activeCartId);
 
-  const handleAddToCart = async (product: Product) => {
+  const handleAddToCart = async (product: Product, quantity: number = 1) => {
     // 1. If no active cart, show dialog to select or create cart
     if (!activeCartId) {
       setPendingProduct(product);
+      setPendingQuantity(quantity); // Save the stepped-up value
       setShowClientDialog(true);
       return;
     }
@@ -329,7 +317,7 @@ export default function App() {
       const payload = {
         order_id: activeCartId, // The UUID of the order/basket
         product_id: product.id,
-        qty: 1
+        qty: quantity
       };
 
       await apiCall(`${API_BASE_URL}/basket/add`, {
@@ -360,8 +348,9 @@ export default function App() {
         })
       );
       
-      toast.success(`Added ${product.name} to database basket`);
-      setSearchResult(null); // Clear the search card after adding
+      toast.success(`Added ${quantity} units of ${product.name}`);
+      setSearchResult(null);      // Removes the result card from UI
+      setPendingQuantity(1);      // Resets the count for the NEXT scan
 
     } catch (error) {
       console.error("Cart API Error:", error);
@@ -370,7 +359,7 @@ export default function App() {
   };
 
 
-  const handleCreateCart = async (clientName: string) => {
+  const handleCreateCart = async (clientName: string, quantity: number = 1) => {
     try {
       // 1. Single API call creates both the Order and the first Item
       const data = await apiCall(`${API_BASE_URL}/basket/create`, {
@@ -379,7 +368,8 @@ export default function App() {
         body: JSON.stringify({
           shop_id: PRESELECTED_SHOP_ID,
           client_name: clientName,
-          initial_product_id: pendingProduct?.id // Pass the scanned item ID
+          initial_product_id: pendingProduct?.id, // Pass the scanned item ID
+          qty: quantity // Send the actual quantity selected in the stepper
         }),
       });
 
@@ -388,7 +378,7 @@ export default function App() {
         id: pendingProduct.id, 
         name: pendingProduct.name, 
         price: pendingProduct.price, 
-        quantity: 1, 
+        quantity: quantity,
         stock: pendingProduct.stock 
       }] : [];
 
@@ -405,6 +395,8 @@ export default function App() {
       // 4. Update all states in a single batch
       setClientCarts((prev) => [...prev, newCart]);
       setActiveCartId(data.order_id);
+      setSearchResult(null);
+      setPendingQuantity(1);
       setPendingProduct(null);
       setShowClientDialog(false); // Close the dialog
       
@@ -422,7 +414,7 @@ export default function App() {
     // If there was a pending product, add it now
     if (pendingProduct) {
       setTimeout(() => {
-        handleAddToCart(pendingProduct);
+        handleAddToCart(pendingProduct, pendingQuantity);
         setPendingProduct(null);
       }, 100);
     }
@@ -430,8 +422,9 @@ export default function App() {
 
   const handleCreateNewCartFromDialog = () => {
     if (newClientName.trim()) {
-      handleCreateCart(newClientName.trim());
+      handleCreateCart(newClientName.trim(), pendingQuantity);
       setNewClientName("");
+      setPendingQuantity(1); // Reset to default
       setShowClientDialog(false);
     }
   };
@@ -475,11 +468,11 @@ export default function App() {
     const totalAvailableStock = product ? (product.displayStock + product.godownStock) : 0;
 
     // 3. Validation: Prevent increasing quantity beyond total stock
-    if (newQuantity > item.quantity && newQuantity > totalAvailableStock) {
-      // Use your existing toast notification system if available
-      alert(`Cannot exceed available stock (${totalAvailableStock} units)`); 
-      return;
-    }
+    // if (newQuantity > item.quantity && newQuantity > totalAvailableStock) {
+    //   // Use your existing toast notification system if available
+    //   alert(`Cannot exceed available stock (${totalAvailableStock} units)`); 
+    //   return;
+    // }
 
     const change = newQuantity - item.quantity; // The backend expects the delta (e.g., +1 or -1)
     
@@ -544,20 +537,33 @@ export default function App() {
 
     // 1. Find the active cart to get its specific discount
     const activeCart = clientCarts.find((c) => c.id === activeCartId);
+    // FINAL VALIDATION: Check stock one last time before calling API
+    const hasShortage = activeCart?.items.some(item => {
+      const masterProduct = products.find(p => p.id === item.id);
+      const available = masterProduct ? (masterProduct.displayStock + masterProduct.godownStock) : 0;
+      return item.quantity > available;
+    });
+
+    if (hasShortage) {
+      toast.error("Cannot finalize sale: One or more items exceed available stock.");
+      return; // Stop the execution here
+    }
     
     // 2. Extract values and ensure they are numbers, not objects or undefined
     const d = Number(activeCart?.discount) || 0; 
     const t = activeCart?.tax !== undefined ? Number(activeCart.tax) : 18;
+    const paid = activeCart?.advancePaid || 0;
 
     try {
       // 3. Send the clean numbers to the backend
       await apiCall(
-        `${API_BASE_URL}/order/finalize-sale?order_id=${activeCartId}&discount=${d}&tax=${t}`, 
+        `${API_BASE_URL}/order/finalize-sale?order_id=${activeCartId}&discount=${d}&tax=${t}&paid_amount=${paid}`,
         { method: "POST" }
       );
 
-      toast.success("Sale finalized! Stock levels updated.");
-      
+      toast.success(`Sale finalized! Stock levels updated. Paid: ₹${paid}`);
+      // REFRESH INVENTORY: After a sale, we MUST re-fetch products to see the new stock
+      await handleLoadInventory();
       setActiveCartId(null);
       setClientCarts((prev) => prev.filter((c) => c.id !== activeCartId));
       setCurrentView("orders");
@@ -579,6 +585,7 @@ export default function App() {
           orderNumber: o.id.slice(0, 8).toUpperCase(),
           customerName: o.client_name || "Unknown",
           total: o.final_total || 0,
+          paidAmount: o.paid_amount || 0,
           status: o.status,
           date: new Date(o.created_at).toLocaleDateString(),
           discount: o.discount_percent || 0
@@ -657,10 +664,13 @@ export default function App() {
 
   const handleGeneratePI = async () => {
     if (!activeCartId) return;
+    // Store the ID in a local variable so we don't lose it during state updates
+    const cartIdToConvert = activeCartId;
     try {
       // Extract discount and tax values, same as handleCheckout
       const d = Number(activeCart?.discount) || 0;
       const t = activeCart?.tax !== undefined ? Number(activeCart.tax) : 18;
+      const paid = activeCart?.advancePaid || 0; // Capture the payment value
 
       // Update order status to 'pi' in backend
        await apiCall(`${API_BASE_URL}/order/update-status`, {
@@ -670,13 +680,19 @@ export default function App() {
           order_id: activeCartId, 
           status: "pi",
           discount_percent: d,
-          tax_percent: t
+          tax_percent: t,
+          paid_amount: paid // ADD THIS LINE
         }),
       });
 
       toast.success(`Proforma Invoice Generated for ${activeCart?.clientName}!`);
-      setActiveCartId(null); // Clear active session
-      setCurrentView("proforma"); // Switch to PI list
+
+      // 1. Remove from the list first using the local variable
+      setClientCarts((prev) => prev.filter((c) => c.id !== cartIdToConvert));
+      // 2. Clear the selection
+      setActiveCartId(null); 
+      // 3. Navigate away
+      setCurrentView("proforma");
       
     } catch (error) {
       toast.error("Failed to generate PI");
@@ -690,11 +706,11 @@ export default function App() {
       
       // 2. Map the backend items to CartItem format
       const freshItems = data.order_items.map((item: any) => ({
-        id: item.product_id || Math.random().toString(),
+        id: item.product_id,
         name: item.item_code,
         price: item.unit_price,
         quantity: item.quantity,
-        stock: 999 // Placeholder stock for editing
+        stock: 0 // Placeholder stock for editing
       }));
 
       // 3. Create or Update the Cart session
@@ -704,7 +720,8 @@ export default function App() {
         items: freshItems,
         discount: pi.discount || 0,
         createdAt: pi.createdAt,
-        tax: 18
+        tax: 18,
+        advancePaid: pi.paidAmount || 0
       };
 
       setClientCarts((prev) => {
@@ -717,9 +734,19 @@ export default function App() {
       setCurrentView("cart");
       toast.success(`Loaded ${pi.piNumber} into cart`);
     } catch (error) {
+      console.error("Edit PI Error:", error);
       toast.error("Failed to load PI details for editing");
     }
   };
+
+  // Inside App.tsx - Mapping items for the Cart component
+  const cartItemsWithStock = activeCart?.items.map(item => {
+    const masterProduct = products.find(p => p.id === item.id);
+    return {
+      ...item,
+      // Derive current stock at runtime from the master product list
+      stock: masterProduct ? (masterProduct.displayStock + masterProduct.godownStock) : 0
+    };}) || [];
 
   const getTotalCartCount = () => {
     return clientCarts.reduce(
@@ -727,6 +754,35 @@ export default function App() {
         sum + cart.items.reduce((itemSum, item) => itemSum + item.quantity, 0),
       0
     );
+  };
+
+  const handleUpdateAdvance = (amount: number) => {
+    if (!activeCartId) return;
+    setClientCarts((prev) =>
+      prev.map((cart) => {
+        if (cart.id !== activeCartId) return cart;
+        return { 
+          ...cart, 
+          advancePaid: amount 
+        };
+      })
+    );
+  };
+
+  const handleRecordPayment = async (orderId: string, amount: number, method: string) => {
+    try {
+      await apiCall(`${API_BASE_URL}/order/record-payment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: orderId, amount, method }),
+      });
+
+      // Re-fetch orders to update the 'Paid' and 'Balance' columns
+      await handleLoadOrders(); 
+      toast.success(`Payment of ₹${amount} recorded successfully!`);
+    } catch (error) {
+      console.error("Payment failed:", error);
+    }
   };
 
   // Handle Loading State
@@ -746,6 +802,14 @@ export default function App() {
       </>
     );
   }
+
+// ADD THESE LOGS HERE:
+  console.log("--- RENDER DEBUG ---");
+  console.log("1. Current View:", currentView);
+  console.log("2. Active Cart ID:", activeCartId);
+  console.log("3. Total Carts in State:", clientCarts.length);
+  console.log("4. Active Cart Object Found:", activeCart);
+  console.log("5. Items in Active Cart:", activeCart?.items);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -814,7 +878,7 @@ export default function App() {
           </div>
         )}
         {currentView === "inventory" && <Inventory products={products} />}
-        {currentView === "orders" && <Orders orders={orders} onFetchDetails={fetchOrderItems} />}
+        {currentView === "orders" && <Orders orders={orders} onFetchDetails={fetchOrderItems} onRecordPayment={handleRecordPayment} />}
         {currentView === "cart" && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <CartManager
@@ -836,11 +900,13 @@ export default function App() {
               onUpdateDiscount={handleUpdateDiscount}
               updateCartTax={updateCartTax}
               onGeneratePI={handleGeneratePI}
+              onUpdateAdvance={handleUpdateAdvance}
             />
           </div>
         )}
         {currentView === "proforma" && (
           <ProformaInvoices
+            products={products}
             invoices={proformaOrders.map(o => ({
               id: o.id,
               piNumber: o.orderNumber,
@@ -856,6 +922,7 @@ export default function App() {
               tax_percent: o.tax_percent,
               tax_amount: o.tax_amount,
               final_total: o.final_total,
+              paidAmount: o.paidAmount || 0,
               total: o.total
             }))
             }

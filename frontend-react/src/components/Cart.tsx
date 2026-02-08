@@ -25,6 +25,7 @@ interface CartProps {
   updateCartTax: (cartId: string | null, tax: number | "") => void;
   onCheckout: () => void;
   onGeneratePI: () => void;
+  onUpdateAdvance: (amount: number) => void;
 }
 
 export function Cart({ 
@@ -38,7 +39,8 @@ export function Cart({
   onUpdateDiscount,
   onCheckout,
   onGeneratePI,
-  updateCartTax
+  updateCartTax,
+  onUpdateAdvance
 }: CartProps) {
   // 1. Calculate subtotal first
     const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
@@ -51,6 +53,8 @@ export function Cart({
     const afterDiscount = subtotal - discountAmount;
     const tax = afterDiscount * ((activeCart?.tax ?? 18) / 100); 
     const total = afterDiscount + tax;
+
+    const hasOverstockItems = items.some(item => item.quantity > item.stock);
 
   return (
     <div className="space-y-6">
@@ -90,6 +94,9 @@ export function Cart({
                   <div className="flex-1">
                     <h3 className="font-semibold text-sm uppercase">{item.name}</h3>
                     <p className="text-xs text-gray-500">₹{item.price.toLocaleString()} / unit</p>
+                    {item.quantity > item.stock && (
+                      <Badge variant="destructive" className="mt-1 text-[10px] h-4">Exceeds Stock ({item.stock} avail)</Badge>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -204,8 +211,9 @@ export function Cart({
                       type="number"
                       className="w-10 bg-transparent focus:outline-none text-right appearance-none"
                       value={activeCart?.tax ?? 18} // Defaults to 18
+                      min="0" // Allow 0, prevent negative
                       onChange={(e) => {
-                        const newVal = e.target.value === "" ? "" : Number(e.target.value);
+                        const newVal = e.target.value === "" ? 0 : Math.max(0, Number(e.target.value));
                         updateCartTax(activeCartId, newVal);
                       }}
                     />
@@ -219,11 +227,37 @@ export function Cart({
                 <span className="text-lg font-bold">Total Amount</span>
                 <span className="text-2xl font-black text-blue-700">₹{total.toLocaleString()}</span>
               </div>
+              {/* --- NEW: Advance Payment Section --- */}
+              <div className="mt-4 p-3 bg-blue-50/50 rounded-lg border border-blue-100 flex justify-between items-center">
+                <div className="space-y-1">
+                  <Label htmlFor="advance" className="text-xs font-bold text-blue-800 uppercase tracking-wider">
+                    Advance Payment (₹)
+                  </Label>
+                  <p className="text-[10px] text-gray-500 italic">Enter amount received today</p>
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <Input
+                    id="advance"
+                    type="number"
+                    placeholder="0.00"
+                    className="w-32 h-10 text-right font-bold text-lg bg-white border-blue-200 focus:ring-blue-500"
+                    onChange={(e) => {
+                        const val = parseFloat(e.target.value) || 0;
+                        // You'll need to pass setAdvanceAmount from App.tsx as a prop
+                        onUpdateAdvance(val); 
+                    }}
+                  />
+                  {/* Visual calculation of balance */}
+                  <span className="text-[10px] font-medium text-red-600">
+                    Balance: ₹{(total - (activeCart?.advancePaid || 0)).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+              {/* ---------------------------------- */}
             </div>
-
             <div className="grid grid-cols-1 gap-3 pt-2">
               <Button
-                className="w-full h-12 text-blue-600 border-blue-200 hover:bg-blue-50"
+                className={`w-full h-12 ${hasOverstockItems ? 'border-orange-500 text-orange-600' : 'text-blue-600 border-blue-200'}`}
                 variant="outline"
                 onClick={onGeneratePI}
               >
@@ -232,11 +266,12 @@ export function Cart({
               </Button>
               
               <Button
-                className="w-full h-12 bg-green-600 hover:bg-green-700"
+                className="w-full h-12 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
                 onClick={onCheckout}
+                disabled={hasOverstockItems} // Block direct sale if out of stock
               >
                 <CreditCard className="size-4 mr-2" />
-                Finalize Sale (Direct)
+                {hasOverstockItems ? 'Cannot Sell (Insufficient Stock)' : 'Finalize Sale (Direct)'}
               </Button>
             </div>
           </CardContent>

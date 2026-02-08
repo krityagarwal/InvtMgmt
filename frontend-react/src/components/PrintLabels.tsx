@@ -174,7 +174,7 @@ const LabelItem = ({ product }: LabelItemProps) => {
         )}
       </div>
 
-      <p className="barcode-text">{product.barcode}</p>
+      <p className="barcode-text font-bold">{product.barcode}</p>
       <p className="price-text">₹{product.price}</p>
     </div>
   );

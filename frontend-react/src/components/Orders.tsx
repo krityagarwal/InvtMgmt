@@ -29,6 +29,7 @@ export interface Order {
   discount?: number;
   items: OrderItem[];
   subtotal?: number;
+  paidAmount: number;
   discount_amount?: number;
   discount_percent?: number;
   tax_percent?: number;
@@ -38,10 +39,11 @@ export interface Order {
 
 interface OrdersProps {
   orders: Order[];
-  onFetchDetails: (orderId: string) => void; 
+  onFetchDetails: (orderId: string) => void;
+  onRecordPayment: (orderId: string, amount: number, method: string) => void; // Add this 
 }
 
-export function Orders({ orders, onFetchDetails }: OrdersProps) {
+export function Orders({ orders, onFetchDetails, onRecordPayment }: OrdersProps) {
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
   const toggleExpand = (orderId: string) => {
@@ -108,9 +110,9 @@ export function Orders({ orders, onFetchDetails }: OrdersProps) {
               <TabsTrigger value="pending">Pending</TabsTrigger>
               <TabsTrigger value="completed">Completed</TabsTrigger>
             </TabsList>
-            <TabsContent value="all"><OrderTable orders={orders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} /></TabsContent>
-            <TabsContent value="pending"><OrderTable orders={pendingOrders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} /></TabsContent>
-            <TabsContent value="completed"><OrderTable orders={completedOrders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} /></TabsContent>
+            <TabsContent value="all"><OrderTable orders={orders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} onRecordPayment={onRecordPayment} /></TabsContent>
+            <TabsContent value="pending"><OrderTable orders={pendingOrders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} onRecordPayment={onRecordPayment} /></TabsContent>
+            <TabsContent value="completed"><OrderTable orders={completedOrders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} onRecordPayment={onRecordPayment} /></TabsContent>
           </Tabs>
         </CardContent>
       </Card>
@@ -118,7 +120,7 @@ export function Orders({ orders, onFetchDetails }: OrdersProps) {
   );
 }
 
-function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor }: any) {
+function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, onRecordPayment }: any) {
   return (
     <Table>
       <TableHeader>
@@ -128,6 +130,8 @@ function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor }:
           <TableHead>Customer</TableHead>
           <TableHead>Date</TableHead>
           <TableHead>Total</TableHead>
+          <TableHead>Paid</TableHead>
+          <TableHead>Balance</TableHead>
           <TableHead>Status</TableHead>
         </TableRow>
       </TableHeader>
@@ -142,6 +146,10 @@ function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor }:
               <TableCell>{order.customerName}</TableCell>
               <TableCell>{order.date}</TableCell>
               <TableCell>₹{order.total.toLocaleString()}</TableCell>
+              <TableCell className="text-green-600">₹{(order.paidAmount || 0).toLocaleString()}</TableCell>
+              <TableCell className={`font-bold ${order.total - (order.paidAmount || 0) > 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                ₹{(order.total - (order.paidAmount || 0)).toLocaleString()}
+              </TableCell>
               <TableCell><Badge className={getStatusColor(order.status)}>{order.status}</Badge></TableCell>
             </TableRow>
             
@@ -154,6 +162,29 @@ function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor }:
                     items={order.items || []}
                     financial={order}
                   />
+                  {/* NEW: Record Payment Action Box */}
+                    {(order.total - (order.paidAmount || 0)) > 0 && (
+                      <div className="flex items-center justify-between p-4 bg-white border rounded-lg shadow-sm">
+                        <div>
+                          <p className="text-xs font-semibold text-gray-500 uppercase">Remaining Balance</p>
+                          <p className="text-xl font-bold text-red-600">₹{(order.total - (order.paidAmount || 0)).toLocaleString()}</p>
+                        </div>
+                        <div className="flex gap-2">
+                           <button 
+                             className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors"
+                             onClick={(e) => {
+                               e.stopPropagation();
+                               const amount = prompt(`Enter installment amount for ${order.customerName}:`);
+                               if (amount && !isNaN(parseFloat(amount))) {
+                                 onRecordPayment(order.id, parseFloat(amount), "Cash");
+                               }
+                             }}
+                           >
+                             Record Payment
+                           </button>
+                        </div>
+                      </div>
+                    )}
                 </TableCell>
               </TableRow>
             )}

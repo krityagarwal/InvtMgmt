@@ -20,6 +20,7 @@ export interface ClientCart {
   discount: number;
   createdAt: string;
   tax: number;
+  advancePaid?: number;
 }
 
 interface CartManagerProps {
