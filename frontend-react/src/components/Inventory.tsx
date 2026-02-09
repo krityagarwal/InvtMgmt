@@ -372,6 +372,65 @@ export function Inventory({ products }: InventoryProps) {
     });
   };
 
+const handlePrintLabels = () => {
+  const printContent = document.getElementById('hidden-print-factory');
+  if (!printContent || Object.keys(printSelection).length === 0) {
+    alert("No labels selected for printing.");
+    return;
+  }
+
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    alert("Please allow pop-ups to print labels.");
+    return;
+  }
+
+  // Optimized styles for A4 Grid printing
+  const gridStyles = `
+    @page { size: A4; margin: 10mm; }
+    body { margin: 0; padding: 10px; font-family: sans-serif; background: white !important; }
+    .a4-grid-container { 
+      display: grid; 
+      grid-template-columns: repeat(3, 1fr); 
+      gap: 15px; 
+      width: 100%;
+    }
+    .a4-label-item { 
+      width: 60mm; height: 50mm; 
+      border: 1px dashed #ccc; 
+      display: flex; flex-direction: column; 
+      align-items: center; justify-content: center; 
+      page-break-inside: avoid;
+    }
+    .qr-wrapper { margin-bottom: 8px; }
+    .barcode-text { font-size: 13px; font-family: monospace; margin-top: 8px; font-weight: 700; text-align: center;}
+    .price-text { font-size: 16px; font-weight: 900; margin-top: 4px; }
+  `;
+
+  printWindow.document.write(`
+    <html>
+      <head>
+        <title>Inventory Labels</title>
+        <style>${gridStyles}</style>
+      </head>
+      <body>
+        <div class="a4-grid-container">
+          ${printContent.innerHTML}
+        </div>
+        <script>
+          window.onload = () => {
+            setTimeout(() => {
+              window.print();
+              window.close();
+            }, 750);
+          };
+        </script>
+      </body>
+    </html>
+  `);
+  printWindow.document.close();
+};
+
   return (
     <div className="space-y-6">
       {/* Optimized Retail Dashboard Cards */}
@@ -412,8 +471,13 @@ export function Inventory({ products }: InventoryProps) {
                 <EyeOff className="mr-2 size-4" />
                 {showOnlyNonDisplayed ? "Showing Non-Displayed" : "Filter Non-Displayed"}
               </Button>
-              <Button disabled={Object.keys(printSelection).length === 0} className="bg-blue-600">
-                <Printer className="mr-2 size-4" /> Print Selected
+              <Button 
+                disabled={Object.keys(printSelection).length === 0} 
+                className="bg-blue-600 hover:bg-blue-700"
+                onClick={handlePrintLabels} // Re-linked to the popup logic
+              >
+                <Printer className="mr-2 size-4" /> 
+                Print {Object.keys(printSelection).length} Labels
               </Button>
             </div>
           </div>
@@ -506,6 +570,24 @@ export function Inventory({ products }: InventoryProps) {
           </Table>
         </CardContent>
       </Card>
+    {/* The Printing Factory: Optimized to match your printSelection state */}
+      <div 
+        id="hidden-print-factory" 
+        style={{ position: 'absolute', left: '-9999px', top: 0, opacity: 0 }}
+      >
+        {products.filter(p => printSelection[p.id]).map((product) => {
+          // Get quantity from selection or default to 1
+          const qty = printSelection[product.id] || 1;
+          return Array.from({ length: qty }).map((_, i) => (
+            <div key={`${product.id}-${i}`} className="a4-label-item">
+              <div className="qr-wrapper">
+                <QRCode value={product.barcode} size={100} level="H" />
+              </div>
+              <p className="barcode-text">{product.barcode}</p>
+            </div>
+          ));
+        })}
+      </div>
     </div>
   );
 }

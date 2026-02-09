@@ -222,7 +222,6 @@ export default function App() {
       console.error("Error loading active carts:", error);
     }
   };
-
   // On-demand: Load orders when button is clicked
   const handleLoadOrders = async () => {
     if (ordersLoaded) return; // Don't reload if already loaded
@@ -1001,7 +1000,6 @@ export default function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
     </div>
   );
 }
