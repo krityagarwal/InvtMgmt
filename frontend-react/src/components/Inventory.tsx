@@ -386,26 +386,62 @@ const handlePrintLabels = () => {
   }
 
   // Optimized styles for A4 Grid printing
+  // const gridStyles = `
+  //   @page { size: A4; margin: 8mm; }
+  //   body { margin: 0; padding: 10px; font-family: sans-serif; background: white !important; }
+  //   .a4-grid-container { 
+  //     display: grid; 
+  //     grid-template-columns: repeat(3, 1fr); 
+  //     gap: 15px; 
+  //     width: 100%;
+  //   }
+  //   .a4-label-item { 
+  //     width: 60mm; height: 50mm; 
+  //     border: 1px dashed #ccc; 
+  //     display: flex; flex-direction: column; 
+  //     align-items: center; justify-content: center; 
+  //     page-break-inside: avoid;
+  //   }
+  //   .qr-wrapper { margin-bottom: 8px; }
+  //   .barcode-text { font-size: 13px; font-family: monospace; margin-top: 8px; font-weight: 700; text-align: center;}
+  //   .price-text { font-size: 16px; font-weight: 900; margin-top: 4px; }
+  // `;
+
   const gridStyles = `
-    @page { size: A4; margin: 10mm; }
-    body { margin: 0; padding: 10px; font-family: sans-serif; background: white !important; }
-    .a4-grid-container { 
-      display: grid; 
-      grid-template-columns: repeat(3, 1fr); 
-      gap: 15px; 
-      width: 100%;
-    }
-    .a4-label-item { 
-      width: 60mm; height: 50mm; 
-      border: 1px dashed #ccc; 
-      display: flex; flex-direction: column; 
-      align-items: center; justify-content: center; 
-      page-break-inside: avoid;
-    }
-    .qr-wrapper { margin-bottom: 8px; }
-    .barcode-text { font-size: 13px; font-family: monospace; margin-top: 8px; font-weight: 700; text-align: center;}
-    .price-text { font-size: 16px; font-weight: 900; margin-top: 4px; }
-  `;
+  @page { 
+    size: A4; 
+    margin: 8mm; /* Reduced margin to fit 4 columns */
+  }
+  body { 
+    margin: 0; 
+    padding: 0; 
+    background: white !important; 
+  }
+  .a4-grid-container { 
+    display: grid; 
+    /* Force 4 columns */
+    grid-template-columns: repeat(4, 1fr); 
+    /* Force 6 rows per page */
+    grid-template-rows: repeat(6, 45mm); 
+    gap: 2mm; 
+    width: 100%;
+  }
+  .a4-label-item { 
+    width: 100%; 
+    height: 45mm; 
+    border: 1px dashed #eee; 
+    display: flex; 
+    flex-direction: column; 
+    align-items: center; 
+    justify-content: center; 
+    page-break-inside: avoid;
+    overflow: hidden;
+  }
+  .qr-img { width: 75px; height: 75px; object-fit: contain; }
+  .vendor-name { font-size: 10px; text-transform: uppercase; color: #666; margin-bottom: 2px; }
+  .barcode-text { font-size: 12px; font-family: monospace; font-weight: 700; margin-top: 4px; }
+  .price-text { font-size: 14px; font-weight: 900; margin-top: 2px; }
+`;
 
   printWindow.document.write(`
     <html>
