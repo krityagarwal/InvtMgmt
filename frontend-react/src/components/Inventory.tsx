@@ -372,6 +372,34 @@ export function Inventory({ products }: InventoryProps) {
     });
   };
 
+  // Inside your Inventory function in Inventory.tsx
+
+const toggleAll = () => {
+  // 1. Check if all currently filtered products are already selected
+  const allFilteredSelected = filteredProducts.length > 0 && 
+    filteredProducts.every(p => !!printSelection[p.id]);
+
+  if (allFilteredSelected) {
+    // 2. If all are selected, clear the selection for THESE items
+    setPrintSelection(prev => {
+      const newSelection = { ...prev };
+      filteredProducts.forEach(p => {
+        delete newSelection[p.id];
+      });
+      return newSelection;
+    });
+  } else {
+    // 3. Otherwise, add all filtered products to the selection
+    setPrintSelection(prev => {
+      const newSelection = { ...prev };
+      filteredProducts.forEach(p => {
+        newSelection[p.id] = 1; // Default quantity to 1
+      });
+      return newSelection;
+    });
+  }
+};
+
 const handlePrintLabels = () => {
   const printContent = document.getElementById('hidden-print-factory');
   if (!printContent || Object.keys(printSelection).length === 0) {
@@ -545,7 +573,14 @@ const handlePrintLabels = () => {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[40px]"><Checkbox /></TableHead>
+                {/* <TableHead className="w-[40px]"><Checkbox /></TableHead> */}
+                <TableHead className="w-[40px]">
+                  <Checkbox 
+                    // Show as checked only if all visible items are selected
+                    checked={filteredProducts.length > 0 && filteredProducts.every(p => !!printSelection[p.id])}
+                    onCheckedChange={toggleAll}
+                  />
+                </TableHead>
                 <TableHead className="w-[60px]">Image</TableHead>
                 <TableHead className="w-[80px]">QR</TableHead>
                 <TableHead>Item Details</TableHead>
