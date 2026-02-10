@@ -33,27 +33,108 @@ export interface Product {
 }
 
 function CameraScanner({ onScan }: { onScan: (text: string) => void; onClose: () => void }) {
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [scanner, setScanner] = useState<Html5Qrcode | null>(null);
+
   useEffect(() => {
     const html5QrCode = new Html5Qrcode("reader");
+    setScanner(html5QrCode);
+
     const startScanner = async () => {
       try {
         await html5QrCode.start(
           { facingMode: "environment" },
-          { fps: 10, qrbox: { width: 250, height: 180 }, aspectRatio: 1.0 },
+          { 
+            fps: 20, // Higher FPS for faster capture
+            qrbox: { width: 280, height: 200 }, 
+            aspectRatio: 1.0,
+            // FORCE HIGH RESOLUTION: This helps "see" small bars at a distance
+            videoConstraints: {
+              width: { min: 1280, ideal: 1920 },
+              height: { min: 720, ideal: 1080 },
+              facingMode: "environment"
+            }
+          },
           (decodedText) => { onScan(decodedText); },
           () => { }
         );
       } catch (err) { console.error("Scanner error", err); }
     };
+
     startScanner();
+
     return () => {
       if (html5QrCode.isScanning) {
         html5QrCode.stop().then(() => html5QrCode.clear()).catch(e => console.error(e));
       }
     };
   }, [onScan]);
-  return <div id="reader" className="w-full overflow-hidden rounded-md"></div>;
+
+  // Handle Zoom logic
+  const handleZoomChange = async (val: number) => {
+    setZoomLevel(val);
+    if (scanner && scanner.isScanning) {
+      try {
+        const track = scanner.getRunningTrack();
+        // applyVideoConstraints is the browser way to handle zoom
+        await track.applyConstraints({
+          advanced: [{ zoom: val }]
+        } as any);
+      } catch (e) {
+        console.warn("Zoom not supported on this device/browser");
+      }
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div id="reader" className="w-full overflow-hidden rounded-md bg-black"></div>
+      
+      {/* Zoom UI Control */}
+      <div className="p-4 bg-slate-900 rounded-b-lg">
+        <div className="flex items-center gap-4">
+          <span className="text-white text-xs font-bold">Zoom</span>
+          <input 
+            type="range" 
+            min="1" 
+            max="5" 
+            step="0.1" 
+            className="flex-1 accent-blue-500"
+            value={zoomLevel}
+            onChange={(e) => handleZoomChange(parseFloat(e.target.value))}
+          />
+          <span className="text-white text-xs w-6">{zoomLevel}x</span>
+        </div>
+        <p className="text-[10px] text-gray-400 mt-2 text-center">
+          Pinch to zoom or use slider for distant barcodes
+        </p>
+      </div>
+    </div>
+  );
 }
+
+// function CameraScanner({ onScan }: { onScan: (text: string) => void; onClose: () => void }) {
+//   useEffect(() => {
+//     const html5QrCode = new Html5Qrcode("reader");
+//     const startScanner = async () => {
+//       try {
+//         await html5QrCode.start(
+//           { facingMode: "environment" },
+//           { fps: 10, qrbox: { width: 250, height: 180 }, aspectRatio: 1.0 },
+//           (decodedText) => { onScan(decodedText); },
+//           () => { }
+//         );
+//       } catch (err) { console.error("Scanner error", err); }
+//     };
+//     startScanner();
+//     return () => {
+//       if (html5QrCode.isScanning) {
+//         html5QrCode.stop().then(() => html5QrCode.clear()).catch(e => console.error(e));
+//       }
+//     };
+//   }, [onScan]);
+//   return <div id="reader" className="w-full overflow-hidden rounded-md"></div>;
+// }
 
 export function Scanner({ products, onAddToCart, onProductSearch, searchResult }: ScannerProps) {
   const [scanValue, setScanValue] = useState("");
