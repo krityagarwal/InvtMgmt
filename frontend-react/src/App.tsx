@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ShoppingCart, Package, FileText, Scan, FileCheck, Home} from "lucide-react";
 import { Scanner, Product } from "./components/Scanner";
 import { Inventory } from "./components/Inventory";
@@ -22,6 +22,7 @@ import { GlobalLoader } from "./components/Loader";
 import { supabase } from "./lib/supabaseClient"; // Ensure you have this file
 import LoginForm from "./components/auth/LoginForm";
 import HomeScreen from "./components/HomeScreen";
+import { Label } from "./components/ui/label";
 
 // 1. Hardcode your preferred Shop ID here for now
 const PRESELECTED_SHOP_ID = "102e6445-6462-4cb6-bcbf-e9dd43a70b7e";
@@ -40,6 +41,9 @@ export default function App() {
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
   const [pendingQuantity, setPendingQuantity] = useState<number>(1); // New state
   const [newClientName, setNewClientName] = useState("");
+  const [clientPhone, setClientPhone] = useState("");
+  const [referralSource, setReferralSource] = useState("");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
   const [editingPI, setEditingPI] = useState<ProformaInvoice | null>(null);
   // Compute proformaOrders from orders to ensure it's always in sync
   const proformaOrders = orders.filter(o => o.status === 'pi');
@@ -51,6 +55,7 @@ export default function App() {
   const [inventoryLoaded, setInventoryLoaded] = useState(false);
   const [activeCartLoaded, setActiveCartLoaded] = useState(false);
   const [ordersLoaded, setOrdersLoaded] = useState(false);
+
 
     useEffect(() => {
       // 1. Initial Session Check
@@ -138,6 +143,7 @@ export default function App() {
       loadData();
     }, [currentView, session]); // This effect "watches" these two variables
 
+    
   const apiCall = async (url: string, options?: RequestInit) => {
     setIsLoading(true);
     try {
@@ -270,35 +276,45 @@ export default function App() {
     }
   };
 
-    const handleProductSearch = async (code: string) => {
-    if (!code.trim()) return;
-    
-    try {
-      // apiCall triggers the GlobalLoader automatically
-      const item = await apiCall(`${API_BASE_URL}/product/by-code?item_code=${encodeURIComponent(code)}`);
+  const isSearching = useRef(false);
+  const handleProductSearch = async (code: string) => {
+      if (!code.trim()|| isSearching.current) return;
+      isSearching.current = true; // Lock the search
       
-      if (item && !item.error) {
-        const foundProduct: Product = {
-          id: item.id,
-          barcode: item.item_code,
-          name: item.item_code,
-          vendor: item.vendor_name || "-",
-          price: item.selling_price,
-          displayStock: item.qty_display || 0, // Added
-          godownStock: item.qty_godown || 0,   // Added
-          stock: (item.qty_display || 0) + (item.qty_godown || 0),
-          category: item.category_name || "General", // Added
-          photo_url: item.photo_url
-        };
+      try {
+        // apiCall triggers the GlobalLoader automatically
+        const item = await apiCall(`${API_BASE_URL}/product/by-code?item_code=${encodeURIComponent(code)}`);
         
-        setSearchResult(foundProduct);
-      } else {
-        toast.error(`Product ${code} not found`);
+        if (item && !item.error) {
+          const foundProduct: Product = {
+            id: item.id,
+            barcode: item.item_code,
+            name: item.item_code,
+            vendor: item.vendor_name || "-",
+            price: item.selling_price,
+            displayStock: item.qty_display || 0, // Added
+            godownStock: item.qty_godown || 0,   // Added
+            stock: (item.qty_display || 0) + (item.qty_godown || 0),
+            category: item.category_name || "General", // Added
+            photo_url: item.photo_url
+          };
+          
+          setSearchResult(foundProduct);
+        } else {
+          toast.error(`Product ${code} not found`);
+          setSearchResult(null);
+        }
+      } catch (error) {
+        console.error("Search error:", error);
+        setSearchResult(null);
+      } finally {
+        // UNLOCK: Wait 1 second before allowing another scan 
+      // This gives the UI time to render the result properly
+        setTimeout(() => {
+          isSearching.current = false;
+        }, 1000); 
       }
-    } catch (error) {
-      console.error("Search error:", error);
-    }
-  };
+    };
 
   const activeCart = clientCarts.find((cart) => cart.id === activeCartId);
 
@@ -367,6 +383,9 @@ export default function App() {
         body: JSON.stringify({
           shop_id: PRESELECTED_SHOP_ID,
           client_name: clientName,
+          client_phone: clientPhone,        // Identity
+          referral_source: referralSource,  // Partnership
+          delivery_address: deliveryAddress,// Logistics
           initial_product_id: pendingProduct?.id, // Pass the scanned item ID
           qty: quantity // Send the actual quantity selected in the stepper
         }),
@@ -385,6 +404,9 @@ export default function App() {
       const newCart: ClientCart = {
         id: data.order_id,
         clientName: data.client_name,
+        clientPhone: clientPhone,
+        referralSource: referralSource,
+        deliveryAddress: deliveryAddress,
         items: initialItems,
         createdAt: new Date().toISOString(),
         discount: 0, 
@@ -397,6 +419,9 @@ export default function App() {
       setSearchResult(null);
       setPendingQuantity(1);
       setPendingProduct(null);
+      setClientPhone("");
+      setReferralSource("");
+      setDeliveryAddress("");
       setShowClientDialog(false); // Close the dialog
       
       toast.success(`Session started for ${clientName}${pendingProduct ? ` with ${pendingProduct.name}` : ''}`);
@@ -531,13 +556,57 @@ export default function App() {
     }
   };
 
+  // const handleCheckout = async () => {
+  //   if (!activeCartId) return;
+
+  //   // 1. Find the active cart to get its specific discount
+  //   const activeCart = clientCarts.find((c) => c.id === activeCartId);
+  //   // FINAL VALIDATION: Check stock one last time before calling API
+  //   const hasShortage = activeCart?.items.some(item => {
+  //     const masterProduct = products.find(p => p.id === item.id);
+  //     const available = masterProduct ? (masterProduct.displayStock + masterProduct.godownStock) : 0;
+  //     return item.quantity > available;
+  //   });
+
+  //   if (hasShortage) {
+  //     toast.error("Cannot finalize sale: One or more items exceed available stock.");
+  //     return; // Stop the execution here
+  //   }
+    
+  //   // 2. Extract values and ensure they are numbers, not objects or undefined
+  //   const d = Number(activeCart?.discount) || 0; 
+  //   const t = activeCart?.tax !== undefined ? Number(activeCart.tax) : 18;
+  //   const paid = activeCart?.advancePaid || 0;
+
+  //   try {
+  //     // 3. Send the clean numbers to the backend
+  //     await apiCall(
+  //       `${API_BASE_URL}/order/finalize-sale?order_id=${activeCartId}&discount=${d}&tax=${t}&paid_amount=${paid}`,
+  //       { method: "POST" }
+  //     );
+
+  //     toast.success(`Sale finalized! Stock levels updated. Paid: ₹${paid}`);
+  //     // REFRESH INVENTORY: After a sale, we MUST re-fetch products to see the new stock
+  //     await handleLoadInventory();
+  //     setActiveCartId(null);
+  //     setClientCarts((prev) => prev.filter((c) => c.id !== activeCartId));
+  //     setCurrentView("orders");
+  //   } catch (error) {
+  //     // apiCall handles the error toast automatically
+  //     console.error("Checkout error:", error);
+  //   }
+  // };
+
+  // Inside App.tsx component, before 'return'
+  
   const handleCheckout = async () => {
     if (!activeCartId) return;
 
-    // 1. Find the active cart to get its specific discount
     const activeCart = clientCarts.find((c) => c.id === activeCartId);
-    // FINAL VALIDATION: Check stock one last time before calling API
-    const hasShortage = activeCart?.items.some(item => {
+    if (!activeCart) return;
+
+    // 1. FINAL VALIDATION: Check stock one last time
+    const hasShortage = activeCart.items.some(item => {
       const masterProduct = products.find(p => p.id === item.id);
       const available = masterProduct ? (masterProduct.displayStock + masterProduct.godownStock) : 0;
       return item.quantity > available;
@@ -545,34 +614,43 @@ export default function App() {
 
     if (hasShortage) {
       toast.error("Cannot finalize sale: One or more items exceed available stock.");
-      return; // Stop the execution here
+      return;
     }
     
-    // 2. Extract values and ensure they are numbers, not objects or undefined
-    const d = Number(activeCart?.discount) || 0; 
-    const t = activeCart?.tax !== undefined ? Number(activeCart.tax) : 18;
-    const paid = activeCart?.advancePaid || 0;
+    // 2. Prepare the Request Body (JSON)
+    // We include all the metadata that was previously being lost
+    const payload = {
+      order_id: activeCartId,
+      discount_percent: Number(activeCart.discount) || 0,
+      tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 18,
+      paid_amount: Number(activeCart.advancePaid) || 0,
+      referral_source: activeCart.referralSource || "",
+      delivery_address: activeCart.deliveryAddress || "",
+      client_phone: activeCart.clientPhone || ""
+    };
 
     try {
-      // 3. Send the clean numbers to the backend
-      await apiCall(
-        `${API_BASE_URL}/order/finalize-sale?order_id=${activeCartId}&discount=${d}&tax=${t}&paid_amount=${paid}`,
-        { method: "POST" }
-      );
+      // 3. Send data in the BODY instead of the URL
+      await apiCall(`${API_BASE_URL}/order/finalize-sale`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
 
-      toast.success(`Sale finalized! Stock levels updated. Paid: ₹${paid}`);
-      // REFRESH INVENTORY: After a sale, we MUST re-fetch products to see the new stock
+      toast.success(`Sale finalized! Paid: ₹${payload.paid_amount}`);
+      
+      // Refresh and Reset state
       await handleLoadInventory();
       setActiveCartId(null);
       setClientCarts((prev) => prev.filter((c) => c.id !== activeCartId));
       setCurrentView("orders");
     } catch (error) {
-      // apiCall handles the error toast automatically
       console.error("Checkout error:", error);
     }
   };
-
-  // Inside App.tsx component, before 'return'
+  
   const fetchOrderItems = async (orderId: string) => {
     try {
       // If orders is empty, load them first
@@ -662,39 +740,44 @@ export default function App() {
   };
 
   const handleGeneratePI = async () => {
-    if (!activeCartId) return;
-    // Store the ID in a local variable so we don't lose it during state updates
+    if (!activeCartId || !activeCart) return;
     const cartIdToConvert = activeCartId;
-    try {
-      // Extract discount and tax values, same as handleCheckout
-      const d = Number(activeCart?.discount) || 0;
-      const t = activeCart?.tax !== undefined ? Number(activeCart.tax) : 18;
-      const paid = activeCart?.advancePaid || 0; // Capture the payment value
 
-      // Update order status to 'pi' in backend
-       await apiCall(`${API_BASE_URL}/order/update-status`, {
+    try {
+      const d = Number(activeCart.discount) || 0;
+      const t = activeCart.tax !== undefined ? Number(activeCart.tax) : 18;
+      const paid = activeCart.advancePaid || 0;
+
+      // 1. Send EVERYTHING to the backend
+      await apiCall(`${API_BASE_URL}/order/update-status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          order_id: activeCartId, 
+          order_id: cartIdToConvert, 
           status: "pi",
           discount_percent: d,
           tax_percent: t,
-          paid_amount: paid // ADD THIS LINE
+          paid_amount: paid,
+          referral_source: activeCart.referralSource || "",
+          delivery_address: activeCart.deliveryAddress || "",
+          client_phone: activeCart.clientPhone || ""
         }),
       });
 
-      toast.success(`Proforma Invoice Generated for ${activeCart?.clientName}!`);
+      toast.success(`PI Generated for ${activeCart.clientName}!`);
 
-      // 1. Remove from the list first using the local variable
+      // 2. State Cleanup
       setClientCarts((prev) => prev.filter((c) => c.id !== cartIdToConvert));
-      // 2. Clear the selection
-      setActiveCartId(null); 
-      // 3. Navigate away
-      setCurrentView("proforma");
       
+      // IMPORTANT: Switch view BEFORE clearing the ID to avoid Homepage flickers
+      setCurrentView("proforma"); 
+      setActiveCartId(null); 
+      
+      // 3. Refresh the PI list so the new data shows up
+      await handleLoadOrders(); 
+
     } catch (error) {
-      toast.error("Failed to generate PI");
+      console.error("PI Error:", error);
     }
   };
 
@@ -708,19 +791,21 @@ export default function App() {
         id: item.product_id,
         name: item.item_code,
         price: item.unit_price,
-        quantity: item.quantity,
-        stock: 0 // Placeholder stock for editing
+        quantity: item.quantity
       }));
 
       // 3. Create or Update the Cart session
       const newCart: ClientCart = {
         id: pi.id,
-        clientName: pi.clientName,
+        clientName: pi.clientName, // This is usually fine from 'pi'
         items: freshItems,
-        discount: pi.discount || 0,
-        createdAt: pi.createdAt,
-        tax: 18,
-        advancePaid: pi.paidAmount || 0
+        discount: data.discount_percent || 0,
+        createdAt: data.created_at || pi.createdAt,
+        tax: data.tax_percent || 18,
+        advancePaid: data.paid_amount || 0,
+        referralSource: data.referral_source || "",
+        deliveryAddress: data.delivery_address || "",
+        clientPhone: data.client_phone || ""
       };
 
       setClientCarts((prev) => {
@@ -782,6 +867,19 @@ export default function App() {
     } catch (error) {
       console.error("Payment failed:", error);
     }
+  };
+
+  // Inside App.tsx
+  const handleUpdateCartMetadata = (field: keyof ClientCart, value: string) => {
+    if (!activeCartId) return;
+
+    setClientCarts((prevCarts) =>
+      prevCarts.map((cart) =>
+        cart.id === activeCartId 
+          ? { ...cart, [field]: value } 
+          : cart
+      )
+    );
   };
 
   // Handle Loading State
@@ -889,6 +987,7 @@ export default function App() {
             />
             <Cart
               items={activeCart?.items || []}
+              products={products}
               clientName={activeCart?.clientName || null}
               discount={activeCart?.discount || 0}
               activeCart={activeCart}
@@ -900,6 +999,9 @@ export default function App() {
               updateCartTax={updateCartTax}
               onGeneratePI={handleGeneratePI}
               onUpdateAdvance={handleUpdateAdvance}
+              onUpdateAddress={(val) => handleUpdateCartMetadata('deliveryAddress', val)} 
+              onUpdatePhone={(val) => handleUpdateCartMetadata('clientPhone', val)}
+              onUpdateReferral={(val) => handleUpdateCartMetadata('referralSource', val)}
             />
           </div>
         )}
@@ -969,7 +1071,7 @@ export default function App() {
                 </div>
               </div>
             )}
-            <div>
+            {/* <div>
               <h4 className="text-sm font-medium mb-2">New Cart</h4>
               <Input
                 type="text"
@@ -979,6 +1081,41 @@ export default function App() {
                 onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
                 autoFocus
               />
+            </div> */}
+            <div className="space-y-3">
+              <h4 className="text-sm font-medium border-b pb-1">New Cart</h4>
+              
+              <div>
+                <Label className="text-[10px] uppercase font-bold text-gray-400">Client Name *</Label>
+                <Input
+                  placeholder="Enter name..."
+                  value={newClientName}
+                  onChange={(e) => setNewClientName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
+                  autoFocus
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-[10px] uppercase font-bold text-gray-400">Phone</Label>
+                  <Input
+                    placeholder="Contact #"
+                    value={clientPhone}
+                    onChange={(e) => setClientPhone(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
+                  />
+                </div>
+                <div>
+                  <Label className="text-[10px] uppercase font-bold text-gray-400">Referral</Label>
+                  <Input
+                    placeholder="Designer / Partner"
+                    value={referralSource}
+                    onChange={(e) => setReferralSource(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
+                  />
+                </div>
+              </div>
             </div>
           </div>
           <DialogFooter>
