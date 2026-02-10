@@ -70,21 +70,40 @@ function CameraScanner({ onScan }: { onScan: (text: string) => void; onClose: ()
     };
   }, [onScan]);
 
-  // Handle Zoom logic
-  const handleZoomChange = async (val: number) => {
-    setZoomLevel(val);
-    if (scanner && scanner.isScanning) {
+  // Inside CameraScanner component
+
+const handleZoomChange = async (val: number) => {
+  setZoomLevel(val);
+  
+  // 1. Correct way to get the track from the scanner
+  // We access the underlying media track directly
+  const videoElement = document.querySelector("#reader video") as HTMLVideoElement;
+  
+  if (videoElement && videoElement.srcObject) {
+    const stream = videoElement.srcObject as MediaStream;
+    const track = stream.getVideoTracks()[0]; // This is the 'Running Track'
+    
+    if (track) {
       try {
-        const track = scanner.getRunningTrack();
-        // applyVideoConstraints is the browser way to handle zoom
-        await track.applyConstraints({
-          advanced: [{ zoom: val }]
-        } as any);
+        const capabilities = track.getCapabilities() as any;
+        
+        // 2. Check if the hardware supports zoom
+        if (capabilities.zoom) {
+          await track.applyConstraints({
+            advanced: [{ zoom: val }]
+          } as any);
+        } else {
+          // 3. FALLBACK: CSS Zoom (Enlarges the video feed digitally)
+          videoElement.style.transform = `scale(${val})`;
+          videoElement.style.transformOrigin = "center";
+        }
       } catch (e) {
-        console.warn("Zoom not supported on this device/browser");
+        console.warn("Hardware zoom failed, using CSS fallback", e);
+        videoElement.style.transform = `scale(${val})`;
       }
     }
-  };
+  }
+};
 
   return (
     <div className="space-y-4">
@@ -333,7 +352,7 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
         </div>
       )} */}
 
-      <Dialog open={isCameraOpen} onOpenChange={setIsCameraOpen}>
+      {/* <Dialog open={isCameraOpen} onOpenChange={setIsCameraOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Scan Item Barcode</DialogTitle>
@@ -348,6 +367,27 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
                 onClose={() => setIsCameraOpen(false)}
               />
             )}
+          </div>
+          <Button variant="ghost" onClick={() => setIsCameraOpen(false)} className="w-full">Cancel</Button>
+        </DialogContent>
+      </Dialog> */}
+
+      {/* Instead of conditional rendering, use visibility */}
+      <Dialog open={isCameraOpen} onOpenChange={setIsCameraOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Scan Item Barcode</DialogTitle>
+          </DialogHeader>
+          
+          {/* Keep the component mounted so the browser 'holds' the permission */}
+          <div className="bg-slate-950 rounded-lg overflow-hidden border border-slate-800">
+              <CameraScanner 
+                onScan={(text) => {
+                  onProductSearch(text);
+                  setIsCameraOpen(false);
+                }} 
+                onClose={() => setIsCameraOpen(false)}
+              />
           </div>
           <Button variant="ghost" onClick={() => setIsCameraOpen(false)} className="w-full">Cancel</Button>
         </DialogContent>
