@@ -61,12 +61,33 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
   const [quantity, setQuantity] = useState(1);
 
   // 1 & 2. Fuzzy, Case-Insensitive Filter
+  // const suggestions = useMemo(() => {
+  //   if (!scanValue.trim()) return [];
+  //   const fuzzyPattern = scanValue.split("").join(".*");
+  //   const regex = new RegExp(fuzzyPattern, "i");
+  //   return products.filter(p => regex.test(p.barcode)).slice(0, 5);
+  // }, [scanValue, products]);
+
   const suggestions = useMemo(() => {
-    if (!scanValue.trim()) return [];
-    const fuzzyPattern = scanValue.split("").join(".*");
+  if (!scanValue.trim()) return [];
+
+  // 1. Escape special characters (+, -, *, etc.) to prevent SyntaxErrors
+  const escapedValue = scanValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // 2. Create the fuzzy pattern using the escaped string
+  const fuzzyPattern = escapedValue.split("").join(".*");
+  
+  try {
     const regex = new RegExp(fuzzyPattern, "i");
     return products.filter(p => regex.test(p.barcode)).slice(0, 5);
-  }, [scanValue, products]);
+  } catch (e) {
+    // Fallback to simple inclusion check if regex still fails
+    console.error("Regex error:", e);
+    return products.filter(p => 
+      p.barcode.toLowerCase().includes(scanValue.toLowerCase())
+    ).slice(0, 5);
+  }
+}, [scanValue, products]);
 
   // Reset quantity when search result changes
   useEffect(() => {
@@ -121,7 +142,72 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
         </Button>
       </div>
 
-      {searchResult && (
+    {searchResult && (
+      <div className="p-3 border rounded-lg bg-blue-50/50 flex items-center justify-between gap-4 animate-in fade-in zoom-in-95">
+        {/* --- NEW: Image Preview Section --- */}
+        <div className="size-16 min-w-[64px] bg-white border rounded-md overflow-hidden flex items-center justify-center">
+          {searchResult.photo_url ? (
+            <img 
+              src={searchResult.photo_url} 
+              alt={searchResult.name} 
+              className="size-full object-cover"
+              onError={(e) => {
+                // Fallback for broken links
+                (e.target as HTMLImageElement).src = "https://placehold.co/100x100?text=No+Img";
+              }}
+            />
+          ) : (
+            <div className="size-full flex items-center justify-center bg-gray-100">
+              <span className="text-[10px] text-gray-400">No Img</span>
+            </div>
+          )}
+        </div>
+
+        {/* Details Section */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-2 mb-1">
+            <h3 className="font-bold text-gray-900 truncate">{searchResult.name}</h3>
+            <span className="text-[10px] text-gray-400 font-mono">#{searchResult.barcode}</span>
+          </div>
+          <div className="flex items-center gap-3 text-xs">
+            <span className="font-bold text-blue-700">₹{searchResult.price.toLocaleString()}</span>
+            <div className="flex gap-2 border-l pl-3 border-blue-200">
+              <span className="text-gray-500">Stock: <b className="text-gray-900">{searchResult.stock}</b></span>
+            </div>
+          </div>
+        </div>
+
+        {/* Quantity Stepper (Remains same) */}
+        {searchResult.stock > 0 ? (
+          <div className="flex items-center gap-2 bg-white p-1 rounded-lg border">
+            <Button 
+              variant="ghost" size="icon" className="size-8"
+              onClick={() => setQuantity(q => Math.max(1, q - 1))}
+            >
+              <Minus className="size-3" />
+            </Button>
+            <span className="w-6 text-center font-bold text-sm">{quantity}</span>
+            <Button 
+              variant="ghost" size="icon" className="size-8"
+              onClick={() => setQuantity(q => Math.min(searchResult.stock, q + 1))}
+            >
+              <Plus className="size-3" />
+            </Button>
+            <Button 
+              size="sm" 
+              onClick={() => onAddToCart(searchResult, quantity)} 
+              className="bg-blue-600 ml-1"
+            >
+              Add
+            </Button>
+          </div>
+        ) : (
+          <Badge variant="destructive">Out of Stock</Badge>
+        )}
+      </div>
+    )}
+
+      {/* {searchResult && (
         <div className="p-3 border rounded-lg bg-blue-50/50 flex items-center justify-between gap-4 animate-in fade-in zoom-in-95">
           <div className="flex-1 min-w-0">
             <div className="flex items-baseline gap-2 mb-1">
@@ -136,7 +222,7 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
             </div>
           </div>
 
-          {/* 3. Quantity Stepper */}
+          
           {searchResult.stock > 0 ? (
             <div className="flex items-center gap-2 bg-white p-1 rounded-lg border">
               <Button 
@@ -164,7 +250,7 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
             <Badge variant="destructive">Out of Stock</Badge>
           )}
         </div>
-      )}
+      )} */}
 
       <Dialog open={isCameraOpen} onOpenChange={setIsCameraOpen}>
         <DialogContent className="sm:max-w-md">
