@@ -248,7 +248,7 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
         {/* Top Section: Product Details */}
         <div className="flex items-center gap-3">
           {/* Image Preview */}
-          <div className="size-14 min-w-[56px] bg-white border rounded-md overflow-hidden flex items-center justify-center shrink-0 shadow-sm">
+          <div className="size-25 min-w-[56px] bg-white border rounded-md overflow-hidden flex items-center justify-center shrink-0 shadow-sm">
             {searchResult.photo_url ? (
               <img 
                 src={searchResult.photo_url} 
