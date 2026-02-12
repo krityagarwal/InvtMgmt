@@ -243,43 +243,47 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
       </div>
 
     {searchResult && (
-      <div className="p-3 border rounded-lg bg-blue-50/50 flex items-center justify-between gap-4 animate-in fade-in zoom-in-95">
-        {/* --- NEW: Image Preview Section --- */}
-        <div className="size-16 min-w-[64px] bg-white border rounded-md overflow-hidden flex items-center justify-center">
-          {searchResult.photo_url ? (
-            <img 
-              src={searchResult.photo_url} 
-              alt={searchResult.name} 
-              className="size-full object-cover"
-              onError={(e) => {
-                // Fallback for broken links
-                (e.target as HTMLImageElement).src = "https://placehold.co/100x100?text=No+Img";
-              }}
-            />
-          ) : (
-            <div className="size-full flex items-center justify-center bg-gray-100">
-              <span className="text-[10px] text-gray-400">No Img</span>
+      <div className="p-3 border rounded-lg bg-blue-50/50 flex flex-col gap-3 animate-in fade-in zoom-in-95">
+        
+        {/* Top Section: Product Details */}
+        <div className="flex items-center gap-3">
+          {/* Image Preview */}
+          <div className="size-14 min-w-[56px] bg-white border rounded-md overflow-hidden flex items-center justify-center shrink-0 shadow-sm">
+            {searchResult.photo_url ? (
+              <img 
+                src={searchResult.photo_url} 
+                alt={searchResult.name} 
+                className="size-full object-cover"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = "https://placehold.co/100x100?text=No+Img";
+                }}
+              />
+            ) : (
+              <div className="size-full flex items-center justify-center bg-gray-100">
+                <span className="text-[10px] text-gray-400">No Img</span>
+              </div>
+            )}
+          </div>
+
+          {/* Info: Item Code removed from the badge, kept only in the subtitle */}
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-col">
+              <h3 className="font-bold text-gray-900 text-sm leading-tight truncate">
+                {searchResult.name}
+              </h3>
             </div>
-          )}
+            <div className="flex items-center gap-3 mt-2">
+              <span className="font-bold text-blue-700 text-sm">₹{searchResult.price.toLocaleString()}</span>
+              <span className="text-gray-400 text-[11px] border-l pl-3">
+                Stock: <b className="text-gray-900">{searchResult.stock}</b>
+              </span>
+            </div>
+          </div>
         </div>
 
-        {/* Details Section */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-2 mb-1">
-            <h3 className="font-bold text-gray-900 truncate">{searchResult.name}</h3>
-            <span className="text-[10px] text-gray-400 font-mono">#{searchResult.barcode}</span>
-          </div>
-          <div className="flex items-center gap-3 text-xs">
-            <span className="font-bold text-blue-700">₹{searchResult.price.toLocaleString()}</span>
-            <div className="flex gap-2 border-l pl-3 border-blue-200">
-              <span className="text-gray-500">Stock: <b className="text-gray-900">{searchResult.stock}</b></span>
-            </div>
-          </div>
-        </div>
-
-        {/* Quantity Stepper (Remains same) */}
-        {searchResult.stock > 0 ? (
-          <div className="flex items-center gap-2 bg-white p-1 rounded-lg border">
+        {/* Bottom Section: Stepper and Action */}
+        <div className="flex items-center justify-between gap-2 pt-2 border-t border-blue-100">
+          <div className="flex items-center gap-2 bg-white p-1 rounded-lg border shadow-sm">
             <Button 
               variant="ghost" size="icon" className="size-8"
               onClick={() => setQuantity(q => Math.max(1, q - 1))}
@@ -289,21 +293,19 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
             <span className="w-6 text-center font-bold text-sm">{quantity}</span>
             <Button 
               variant="ghost" size="icon" className="size-8"
-              onClick={() => setQuantity(q => Math.min(searchResult.stock, q + 1))}
+              onClick={() => setQuantity(q => q + 1)}
             >
               <Plus className="size-3" />
             </Button>
-            <Button 
-              size="sm" 
-              onClick={() => onAddToCart(searchResult, quantity)} 
-              className="bg-blue-600 ml-1"
-            >
-              Add
-            </Button>
           </div>
-        ) : (
-          <Badge variant="destructive">Out of Stock</Badge>
-        )}
+
+          <Button 
+            onClick={() => onAddToCart(searchResult, quantity)} 
+            className="bg-blue-600 flex-1 h-10 font-bold text-sm shadow-md active:scale-95 transition-transform"
+          >
+            Add to Cart
+          </Button>
+        </div>
       </div>
     )}
 
