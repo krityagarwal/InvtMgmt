@@ -272,7 +272,8 @@ export default function App() {
 
     const handleProductSearch = async (code: string) => {
     if (!code.trim()) return;
-    
+    // PREVENT LOOP: Don't search if the result is already for this code
+    if (searchResult && searchResult.barcode === code) return;
     try {
       // apiCall triggers the GlobalLoader automatically
       const item = await apiCall(`${API_BASE_URL}/product/by-code?item_code=${encodeURIComponent(code)}`);

@@ -194,14 +194,15 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
   // If searchResult is cleared, reset the stepper to 1 for the next scan
     if (searchResult === null) {
       setQuantity(1);
-      setScanValue(""); // Also clear the text input field
+      //setScanValue(""); // Also clear the text input field
     }
   }, [searchResult]);
 
   const handleManualSearch = (code: string) => {
     if (code.trim()) {
-      onProductSearch(code);
-      setScanValue(""); // Clear input after picking
+      const targetCode = code.trim();
+      setScanValue(""); // Clear it first
+      onProductSearch(targetCode);
     }
   };
 
