@@ -1,3 +1,4 @@
+import json
 import os
 import urllib
 from fastapi import FastAPI, Query
@@ -5,7 +6,7 @@ from fastapi import Body
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
-from typing import Optional
+from typing import Any, Optional, Dict, List
 import psycopg2  # <--- This is the missing line
 from psycopg2.extras import RealDictCursor
 import urllib.parse
@@ -15,6 +16,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from fastapi import HTTPException
 import logging
 from config import get_db_conn
+from datetime import datetime
 
 load_dotenv()
 
@@ -101,7 +103,7 @@ async def get_inventory(shop_id: str):
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT 
-                        p.id, p.item_code, p.selling_price, p.vendor_name, p.photo_url,
+                        p.id, p.item_code, p.selling_price, p.cost_price, p.overhead_expense, p.remark, p.vendor_name, p.photo_url,
                         p.qty_display, p.qty_godown, c.name as category_name, p.created_at
                     FROM products p
                     LEFT JOIN categories c ON p.category_id = c.id
@@ -117,6 +119,35 @@ class BasketItem(BaseModel):
     order_id: str  # Changed from shop_id to order_id
     product_id: str
     qty: int = 1
+    attribute_metadata: Optional[List[Dict[str, Any]]] = []
+
+# @app.post("/basket/add")
+# async def add_to_basket(item: BasketItem):
+#     try:
+#         with get_db_conn() as conn:
+#             with conn.cursor() as cur:
+#                 # 1. Get Product Price
+#                 cur.execute("SELECT selling_price FROM products WHERE id = %s", (item.product_id,))
+#                 res = cur.fetchone()
+#                 if not res: 
+#                     raise HTTPException(status_code=404, detail="Product not found")
+#                 price = res['selling_price']
+
+#                 # 2. Add or Update the item in the specific basket (order_id)
+#                 # We use ON CONFLICT to increase quantity if the item is already in the basket
+#                 cur.execute("""
+#                     INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+#                     VALUES (%s, %s, %s, %s)
+#                     ON CONFLICT (order_id, product_id) DO UPDATE 
+#                     SET quantity = order_items.quantity + EXCLUDED.quantity
+#                 """, (item.order_id, item.product_id, item.qty, price))
+#                 # Recalculate after adding new item
+#                 update_order_total(cur, item.order_id)
+#                 conn.commit()
+#                 return {"status": "success", "message": "Item added to session"}
+#     except Exception as e:
+#         logger.error(f"Error adding to basket: {e}")
+#         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/basket/add")
 async def add_to_basket(item: BasketItem):
@@ -131,13 +162,23 @@ async def add_to_basket(item: BasketItem):
                 price = res['selling_price']
 
                 # 2. Add or Update the item in the specific basket (order_id)
-                # We use ON CONFLICT to increase quantity if the item is already in the basket
+                # We now also update the attribute_metadata column
                 cur.execute("""
-                    INSERT INTO order_items (order_id, product_id, quantity, unit_price)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO order_items (order_id, product_id, quantity, unit_price, attribute_metadata)
+                    VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (order_id, product_id) DO UPDATE 
-                    SET quantity = order_items.quantity + EXCLUDED.quantity
-                """, (item.order_id, item.product_id, item.qty, price))
+                    SET 
+                        quantity = order_items.quantity + EXCLUDED.quantity,
+                        attribute_metadata = EXCLUDED.attribute_metadata
+                """, (
+                    item.order_id, 
+                    item.product_id, 
+                    item.qty, 
+                    price, 
+                    # We expect the frontend to send the full updated JSON array
+                    json.dumps(item.attribute_metadata) if hasattr(item, 'attribute_metadata') else '[]'
+                ))
+                
                 # Recalculate after adding new item
                 update_order_total(cur, item.order_id)
                 conn.commit()
@@ -183,41 +224,109 @@ class BasketCreate(BaseModel):
     shop_id: str
     client_name: str
     initial_product_id: str = None  # Added this field
+    client_phone: Optional[str] = None
+    referral_source: Optional[str] = None
+    delivery_address: Optional[str] = None
+    qty: Optional[int] = 1
 
 @app.post("/basket/create")
 async def create_basket(req: BasketCreate):
     try:
         with get_db_conn() as conn:
             with conn.cursor() as cur:
-                # 1. Create client
-                cur.execute(
-                    "INSERT INTO clients (shop_id, name) VALUES (%s, %s) RETURNING id", 
-                    (req.shop_id, req.client_name)
-                )
-                client_id = cur.fetchone()['id']
+                client_id = None
                 
-                # 2. Create the Order (Basket)
+                # 1. Identity Resolution: Check if client exists IN THIS SHOP
+                if req.client_phone:
+                    cur.execute(
+                        "SELECT id FROM clients WHERE shop_id = %s AND phone = %s", 
+                        (req.shop_id, req.client_phone)
+                    )
+                    existing = cur.fetchone()
+                    if existing:
+                        client_id = existing['id']
+
+                # 2. Create new client record if not found
+                if not client_id:
+                    # Original logic maintained: shop_id is passed during client creation
+                    cur.execute(
+                        "INSERT INTO clients (shop_id, name, phone) VALUES (%s, %s, %s) RETURNING id", 
+                        (req.shop_id, req.client_name, req.client_phone)
+                    )
+                    client_id = cur.fetchone()['id']
+                
+                # 3. Create the Order with Transactional Snapshot
                 cur.execute("""
-                    INSERT INTO orders (shop_id, client_id, status, discount_percent, tax_percent) 
-                    VALUES (%s, %s, 'bucket', 0, 0) RETURNING id
-                """, (req.shop_id, client_id))
+                    INSERT INTO orders (
+                        shop_id, client_id, status, client_name, 
+                        client_phone, referral_source, delivery_address,
+                        discount_percent, tax_percent
+                    ) 
+                    VALUES (%s, %s, 'bucket', %s, %s, %s, %s, 0, 18) RETURNING id
+                """, (
+                    req.shop_id, 
+                    client_id, 
+                    req.client_name, 
+                    req.client_phone,
+                    req.referral_source, 
+                    req.delivery_address,
+                ))
                 new_order_id = cur.fetchone()['id']
 
-                # 3. NEW: Insert the first item if provided
+                # 4. Insert the first item if provided
                 if req.initial_product_id:
                     cur.execute("""
                         INSERT INTO order_items (order_id, product_id, quantity, unit_price)
-                        VALUES (%s, %s, 1, (SELECT selling_price FROM products WHERE id = %s))
-                    """, (new_order_id, req.initial_product_id, req.initial_product_id))
+                        VALUES (%s, %s, %s, (SELECT selling_price FROM products WHERE id = %s))
+                    """, (new_order_id, req.initial_product_id, req.qty, req.initial_product_id))
 
-                # 4. Finalize totals and commit
+                # 5. Finalize totals and commit
                 update_order_total(cur, new_order_id)
                 conn.commit()
                 
-                return {"order_id": new_order_id, "client_name": req.client_name}
+                return {
+                    "order_id": new_order_id, 
+                    "client_id": client_id,
+                    "client_name": req.client_name
+                }
     except Exception as e:
         print(f"Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))    
+        raise HTTPException(status_code=500, detail=str(e))
+
+# @app.post("/basket/create")
+# async def create_basket(req: BasketCreate):
+#     try:
+#         with get_db_conn() as conn:
+#             with conn.cursor() as cur:
+#                 # 1. Create client
+#                 cur.execute(
+#                     "INSERT INTO clients (shop_id, name) VALUES (%s, %s) RETURNING id", 
+#                     (req.shop_id, req.client_name)
+#                 )
+#                 client_id = cur.fetchone()['id']
+                
+#                 # 2. Create the Order (Basket)
+#                 cur.execute("""
+#                     INSERT INTO orders (shop_id, client_id, status, discount_percent, tax_percent) 
+#                     VALUES (%s, %s, 'bucket', 0, 0) RETURNING id
+#                 """, (req.shop_id, client_id))
+#                 new_order_id = cur.fetchone()['id']
+
+#                 # 3. NEW: Insert the first item if provided
+#                 if req.initial_product_id:
+#                     cur.execute("""
+#                         INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+#                         VALUES (%s, %s, %s, (SELECT selling_price FROM products WHERE id = %s))
+#                     """, (new_order_id, req.initial_product_id, req.qty,req.initial_product_id))
+
+#                 # 4. Finalize totals and commit
+#                 update_order_total(cur, new_order_id)
+#                 conn.commit()
+                
+#                 return {"order_id": new_order_id, "client_name": req.client_name}
+#     except Exception as e:
+#         print(f"Error: {e}")
+#         raise HTTPException(status_code=500, detail=str(e))    
 
 # @app.post("/basket/create")
 # async def create_basket(req: BasketCreate = Body(...)):
@@ -249,40 +358,105 @@ async def create_basket(req: BasketCreate):
 #         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/order/finalize")
-async def finalize_order(order_id: str):
-    # This logic moves status from 'pi' or 'bucket' to 'sold'
-    # and executes the Godown -> Display waterfall deduction directly on the products table.
+# @app.post("/order/finalize")
+# async def finalize_order(order_id: str):
+#     # This logic moves status from 'pi' or 'bucket' to 'sold'
+#     # and executes the Godown -> Display waterfall deduction directly on the products table.
+#     query_items = "SELECT product_id, quantity FROM order_items WHERE order_id = %s"
+    
+#     # We use get_db_conn from config.py
+#     with get_db_conn() as conn:
+#         with conn.cursor() as cur:
+#             cur.execute(query_items, (order_id,))
+#             items = cur.fetchall()
+            
+#             for item in items:
+#                 # Waterfall Deduction Logic updated for unified 'products' table
+#                 cur.execute("SELECT qty_godown, qty_display FROM products WHERE id = %s", (item['product_id'],))
+#                 stock = cur.fetchone()
+                
+#                 if not stock:
+#                     continue
+
+#                 qty_needed = item['quantity']
+                
+#                 if stock['qty_godown'] >= qty_needed:
+#                     # Deduct entirely from Godown
+#                     cur.execute("UPDATE products SET qty_godown = qty_godown - %s WHERE id = %s", 
+#                                 (qty_needed, item['product_id']))
+#                 else:
+#                     # Deduct what's left in Godown, then the rest from Display
+#                     remainder = qty_needed - stock['qty_godown']
+#                     cur.execute("UPDATE products SET qty_godown = 0, qty_display = qty_display - %s WHERE id = %s", 
+#                                 (remainder, item['product_id']))
+            
+#             # Finalize the order status
+#             cur.execute("UPDATE orders SET status = 'sold', updated_at = NOW() WHERE id = %s", (order_id,))
+#             conn.commit()
+            
+#     return {"status": "success"}
+
+
+# 1. Define the schema to match your React payload
+class FinalizeOrderRequest(BaseModel):
+    order_id: str
+    discount_percent: float
+    tax_percent: float
+    paid_amount: float
+    referral_source: str = ""
+    delivery_address: str = ""
+    client_phone: str = ""
+
+@app.post("/order/finalize-sale")
+async def finalize_order(req: FinalizeOrderRequest): # Now accepts the full object
+    # Define queries
     query_items = "SELECT product_id, quantity FROM order_items WHERE order_id = %s"
     
-    # We use get_db_conn from config.py
     with get_db_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(query_items, (order_id,))
+            # A. Fetch items for stock deduction
+            cur.execute(query_items, (req.order_id,))
             items = cur.fetchall()
             
             for item in items:
-                # Waterfall Deduction Logic updated for unified 'products' table
                 cur.execute("SELECT qty_godown, qty_display FROM products WHERE id = %s", (item['product_id'],))
                 stock = cur.fetchone()
                 
-                if not stock:
-                    continue
+                if not stock: continue
 
                 qty_needed = item['quantity']
                 
                 if stock['qty_godown'] >= qty_needed:
-                    # Deduct entirely from Godown
                     cur.execute("UPDATE products SET qty_godown = qty_godown - %s WHERE id = %s", 
                                 (qty_needed, item['product_id']))
                 else:
-                    # Deduct what's left in Godown, then the rest from Display
                     remainder = qty_needed - stock['qty_godown']
                     cur.execute("UPDATE products SET qty_godown = 0, qty_display = qty_display - %s WHERE id = %s", 
                                 (remainder, item['product_id']))
             
-            # Finalize the order status
-            cur.execute("UPDATE orders SET status = 'sold', updated_at = NOW() WHERE id = %s", (order_id,))
+            # B. Finalize the order status AND save the metadata
+            # We use req.attribute to access the data from the JSON body
+            cur.execute("""
+                UPDATE orders 
+                SET status = 'sold', 
+                    discount_percent = %s, 
+                    tax_percent = %s, 
+                    paid_amount = %s,
+                    referral_source = %s,
+                    delivery_address = %s,
+                    client_phone = %s,
+                    updated_at = NOW() 
+                WHERE id = %s
+            """, (
+                req.discount_percent, 
+                req.tax_percent, 
+                req.paid_amount, 
+                req.referral_source, 
+                req.delivery_address, 
+                req.client_phone, 
+                req.order_id
+            ))
+            
             conn.commit()
             
     return {"status": "success"}
@@ -320,13 +494,9 @@ async def convert_to_pi(req: PIRequest):
 
 @app.get("/basket/details/{order_id}")
 async def get_basket_details(order_id: str):
-    # Fetch order items with details
+    # 1. Added attribute_metadata to the SELECT query
     query_items = """
-        SELECT 
-            oi.product_id, 
-            oi.quantity, 
-            oi.unit_price, 
-            p.item_code
+        SELECT oi.product_id, oi.quantity, oi.unit_price, p.item_code, oi.attribute_metadata, p.photo_url
         FROM order_items oi
         JOIN products p ON oi.product_id = p.id
         WHERE oi.order_id = %s
@@ -335,72 +505,75 @@ async def get_basket_details(order_id: str):
         with get_db_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(query_items, (order_id,))
-                items = cur.fetchall()
+                raw_items = cur.fetchall()
                 
-                # Fetch complete order details including financial breakdown
+                # 2. Parse the JSON metadata for each item
+                formatted_items = []
+                for item in raw_items:
+                    # Handle potential string-to-JSON parsing
+                    metadata = item['attribute_metadata']
+                    if isinstance(metadata, str):
+                        try:
+                            metadata = json.loads(metadata)
+                        except:
+                            metadata = []
+                    
+                    formatted_items.append({
+                        "product_id": item['product_id'],
+                        "quantity": item['quantity'],
+                        "unit_price": float(item['unit_price']),
+                        "item_code": item['item_code'],
+                        "photo_url": item['photo_url'],
+                        "attribute_metadata": metadata if metadata else []
+                    })
+
                 cur.execute("""
                     SELECT 
-                        status, 
-                        discount_percent, 
-                        tax_percent,
-                        subtotal,
-                        discount_amount,
-                        tax_amount,
-                        final_total
+                        status, discount_percent, tax_percent,
+                        subtotal, discount_amount, tax_amount, final_total,
+                        referral_source, delivery_address, client_phone, paid_amount
                     FROM orders 
                     WHERE id = %s
                 """, (order_id,))
                 order_data = cur.fetchone()
                 
-                # If financial data is missing (old orders), recalculate it
-                if order_data and (order_data['subtotal'] is None or order_data['final_total'] is None):
-                    update_order_total(cur, order_id)
-                    cur.execute("""
-                        SELECT 
-                            status, 
-                            discount_percent, 
-                            tax_percent,
-                            subtotal,
-                            discount_amount,
-                            tax_amount,
-                            final_total
-                        FROM orders 
-                        WHERE id = %s
-                    """, (order_id,))
-                    order_data = cur.fetchone()
-                
+                if not order_data:
+                    raise HTTPException(status_code=404, detail="Order not found")
+
                 return {
-                    "order_items": items if items else [],
-                    "status": order_data['status'] if order_data else None,
-                    "discount_percent": order_data['discount_percent'] if order_data else 0,
-                    "tax_percent": order_data['tax_percent'] if order_data else 18,
-                    "subtotal": float(order_data['subtotal']) if order_data and order_data['subtotal'] else 0,
-                    "discount_amount": float(order_data['discount_amount']) if order_data and order_data['discount_amount'] else 0,
-                    "tax_amount": float(order_data['tax_amount']) if order_data and order_data['tax_amount'] else 0,
-                    "final_total": float(order_data['final_total']) if order_data and order_data['final_total'] else 0
+                    "order_items": formatted_items,
+                    "status": order_data['status'],
+                    "discount_percent": order_data['discount_percent'] or 0,
+                    "discount_amount": float(order_data['discount_amount'] or 0),
+                    "tax_percent": order_data['tax_percent'] or 18,
+                    "tax_amount": float(order_data['tax_amount'] or 0),
+                    "subtotal": float(order_data['subtotal'] or 0),
+                    "final_total": float(order_data['final_total'] or 0),
+                    "referral_source": order_data['referral_source'] or "",
+                    "delivery_address": order_data['delivery_address'] or "",
+                    "client_phone": order_data['client_phone'] or "",
+                    "paid_amount": float(order_data['paid_amount'] or 0)
                 }
     except Exception as e:
         logger.error(f"Error fetching basket details: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 @app.get("/orders/list/{shop_id}")
 async def list_orders(shop_id: str, status: str = None):
-    # This query joins orders with clients to show names in the list
     query = """
-        SELECT o.id, o.status, o.final_total, o.created_at, o.discount_percent, o.tax_percent,
-               c.name as client_name
-        FROM orders o
-        LEFT JOIN clients c ON o.client_id = c.id
-        WHERE o.shop_id = %s
+        SELECT id, status, final_total, created_at, 
+               discount_percent, tax_percent, paid_amount,
+               client_name, referral_source, delivery_address, client_phone, discount_amount, tax_amount
+        FROM orders 
+        WHERE shop_id = %s
     """
     params = [shop_id]
 
-    # Add status filter if provided by UI
     if status:
-        query += " AND o.status = %s"
+        query += " AND status = %s"
         params.append(status)
 
-    query += " ORDER BY o.created_at DESC"
+    query += " ORDER BY created_at DESC"
     
     try:
         with get_db_conn() as conn:
@@ -410,7 +583,6 @@ async def list_orders(shop_id: str, status: str = None):
     except Exception as e:
         logger.error(f"Error listing orders: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 class QtyUpdate(BaseModel):
     order_id: str
@@ -472,80 +644,51 @@ async def remove_order_item(order_id: str, product_id: str):
                 return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) 
-    
-# @app.post("/order/finalize-sale")
-# async def create_sale(order_id: str, discount: float = 0.0, tax: float = 0.0):
-#     try:
-#         with get_db_conn() as conn:
-#             with conn.cursor() as cur:
-#                 # 1. Update the order with specific percentages
-#                 cur.execute("""
-#                     UPDATE orders 
-#                     SET discount_percent = %s, tax_percent = %s 
-#                     WHERE id = %s
-#                 """, (discount, tax, order_id))
-
-#                 # 2. Get items and calculate the Subtotal
-#                 cur.execute("SELECT product_id, quantity, unit_price FROM order_items WHERE order_id = %s", (order_id,))
-#                 items = cur.fetchall()
-#                 if not items:
-#                     raise HTTPException(status_code=400, detail="Cart is empty")
-
-#                 subtotal = sum(float(item['unit_price']) * item['quantity'] for item in items)
-
-#                 # 3. Calculate financial breakdown
-#                 discount_amount = subtotal * (discount / 100.0) 
-#                 taxable_amount = subtotal - discount_amount
-#                 tax_amount = taxable_amount * (tax / 100.0)
-#                 final_total = taxable_amount + tax_amount
-
-#                 # 4. Save the calculated totals to the orders table
-#                 cur.execute("""
-#                     UPDATE orders 
-#                     SET subtotal = %s, discount_amount = %s, tax_amount = %s, final_total = %s, status = 'sold'
-#                     WHERE id = %s
-#                 """, (subtotal, discount_amount, tax_amount, final_total, order_id))
-
-#                 # 5. Waterfall Stock Deduction
-#                 for item in items:
-#                     pid, qty = item['product_id'], item['quantity']
-#                     cur.execute("SELECT qty_display, qty_godown FROM products WHERE id = %s", (pid,))
-#                     stock = cur.fetchone()
-
-#                     if stock['qty_godown'] >= qty:
-#                         cur.execute("UPDATE products SET qty_godown = qty_godown - %s WHERE id = %s", (qty, pid))
-#                     elif (stock['qty_godown'] + stock['qty_display']) >= qty:
-#                         remaining = qty - stock['qty_godown']
-#                         cur.execute("UPDATE products SET qty_godown = 0, qty_display = qty_display - %s WHERE id = %s", (remaining, pid))
-#                     else:
-#                         raise Exception(f"Insufficient total stock for product {pid}")
-
-#                 conn.commit()
-#                 return {"status": "success", "final_total": final_total}
-#     except Exception as e:
-#         logger.error(f"Finalize Sale Error: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/order/finalize-sale")
-async def create_sale(order_id: str, discount: float = 0.0, tax: float = 18.0): # Default to 18.0 here too
+async def create_sale(order_id: str, discount: float = 0.0, tax: float = 0.0, paid_amount: float = 0.0): # Default to 0.0 to allow flexibility
     try:
         with get_db_conn() as conn:
             with conn.cursor() as cur:
-                # 1. Fetch items
-                cur.execute("SELECT product_id, quantity, unit_price FROM order_items WHERE order_id = %s", (order_id,))
+                # 1. Fetch items with their current stock levels for validation
+                cur.execute("""
+                    SELECT oi.product_id, oi.quantity, oi.unit_price, p.qty_display, p.qty_godown 
+                    FROM order_items oi
+                    JOIN products p ON oi.product_id = p.id
+                    WHERE oi.order_id = %s
+                """, (order_id,))
                 items = cur.fetchall()
+                
                 if not items:
                     raise HTTPException(status_code=400, detail="Cart is empty")
 
-                # 2. Math Logic (Solidified)
+                # 2. Math Logic
                 subtotal = sum(float(item['unit_price']) * item['quantity'] for item in items)
                 discount_amount = subtotal * (discount / 100.0) 
                 taxable_amount = subtotal - discount_amount
+                # Logic works perfectly even if tax is 0.0
                 tax_amount = taxable_amount * (tax / 100.0)
                 final_total = taxable_amount + tax_amount
 
-                # 3. Single Source of Truth Update
+                # 3. Stock Deduction Logic (CRITICAL FIX)
+                for item in items:
+                    qty_to_deduct = item['quantity']
+                    
+                    # Logic: Try to deduct from display first, then from godown
+                    if item['qty_display'] >= qty_to_deduct:
+                        cur.execute("UPDATE products SET qty_display = qty_display - %s WHERE id = %s", 
+                                   (qty_to_deduct, item['product_id']))
+                    else:
+                        # If display isn't enough, empty display and take remainder from godown
+                        remainder = qty_to_deduct - item['qty_display']
+                        cur.execute("""
+                            UPDATE products 
+                            SET qty_display = 0, 
+                                qty_godown = qty_godown - %s 
+                            WHERE id = %s
+                        """, (remainder, item['product_id']))
+
+                # 4. Finalize the Order status
                 cur.execute("""
                     UPDATE orders 
                     SET discount_percent = %s, 
@@ -554,16 +697,24 @@ async def create_sale(order_id: str, discount: float = 0.0, tax: float = 18.0): 
                         discount_amount = %s, 
                         tax_amount = %s, 
                         final_total = %s, 
+                        paid_amount = %s,
                         status = 'sold'
                     WHERE id = %s
-                """, (discount, tax, subtotal, discount_amount, tax_amount, final_total, order_id))
+                """, (discount, tax, subtotal, discount_amount, tax_amount, final_total, paid_amount,order_id))
 
-                # ... (Rest of your stock deduction logic)
                 conn.commit()
-                return {"status": "success", "final_total": final_total}
+                return {
+                    "status": "success", 
+                    "final_total": final_total, 
+                    "paid_amount": paid_amount,
+                    "balance_due": final_total - paid_amount
+                }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
+        # It's better to log the actual error for debugging
+        print(f"Checkout Error: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error during stock deduction")
+
+
 def update_order_total(cur, order_id):
     """Recalculates and persists the subtotal, discount, tax, and final total."""
     # 1. Calculate the raw subtotal from items
@@ -720,6 +871,10 @@ class StatusUpdateRequest(BaseModel):
     status: str
     discount_percent: Optional[float] = 0.0
     tax_percent: Optional[float] = 18.0
+    paid_amount: float = 0.0
+    referral_source: str = ""   
+    delivery_address: str = "" 
+    client_phone: str = ""     
 
 @app.post("/order/update-status")
 async def update_order_status(request: StatusUpdateRequest):
@@ -734,9 +889,13 @@ async def update_order_status(request: StatusUpdateRequest):
             SET status = %s, 
                 discount_percent = %s,
                 tax_percent = %s,
+                paid_amount = %s,
+                referral_source = %s,
+                delivery_address = %s,
+                client_phone = %s,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
-        """, (request.status, request.discount_percent, request.tax_percent, request.order_id))
+        """, (request.status, request.discount_percent, request.tax_percent, request.paid_amount, request.referral_source, request.delivery_address, request.client_phone, request.order_id))
 
         update_order_total(cur, request.order_id)
         
@@ -747,8 +906,38 @@ async def update_order_status(request: StatusUpdateRequest):
         return {"message": f"Order status updated to {request.status}", "order_id": request.order_id}
         
     except Exception as e:
+        logger.info(f"Error updating order status: {e}")
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         cur.close()
         conn.close()
+
+@app.post("/order/record-payment")
+async def record_payment(data: dict):
+    order_id = data.get("order_id")
+    amount = float(data.get("amount", 0))
+    method = data.get("method", "Cash")
+    notes = data.get("notes", "")
+
+    try:
+        with get_db_conn() as conn:
+            with conn.cursor() as cur:
+                # 1. Record the individual transaction
+                cur.execute("""
+                    INSERT INTO payments (order_id, amount, payment_method, notes)
+                    VALUES (%s, %s, %s, %s)
+                """, (order_id, amount, method, notes))
+
+                # 2. Update the cached 'paid_amount' in orders table for quick UI loading
+                cur.execute("""
+                    UPDATE orders 
+                    SET paid_amount = paid_amount + %s 
+                    WHERE id = %s
+                """, (amount, order_id))
+
+                conn.commit()
+                return {"status": "success", "amount_added": amount}
+    except Exception as e:
+        print(f"Payment Error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to record payment")

@@ -35,6 +35,9 @@ export interface Order {
   tax_percent?: number;
   tax_amount?: number;
   final_total?: number;
+  clientPhone?: string,        
+  referralSource?: string, 
+  deliveryAddress?: string
 }
 
 interface OrdersProps {

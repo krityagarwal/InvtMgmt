@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ShoppingCart, Package, FileText, Scan, FileCheck, Home} from "lucide-react";
 import { Scanner, Product } from "./components/Scanner";
-import { Inventory } from "./components/Inventory";
+import { Inventory, ExtendedProduct } from "./components/Inventory";
 import { Orders, Order } from "./components/Orders";
 import { Cart, CartItem } from "./components/Cart";
 import { CartManager, ClientCart } from "./components/CartManager";
@@ -10,6 +10,7 @@ import { Button } from "./components/ui/button";
 import { Badge } from "./components/ui/badge";
 import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
+import { Session } from "@supabase/supabase-js";
 import {
   Dialog,
   DialogContent,
@@ -22,15 +23,14 @@ import { GlobalLoader } from "./components/Loader";
 import { supabase } from "./lib/supabaseClient"; // Ensure you have this file
 import LoginForm from "./components/auth/LoginForm";
 import HomeScreen from "./components/HomeScreen";
-
+import { Label } from "./components/ui/label";
 // 1. Hardcode your preferred Shop ID here for now
 const PRESELECTED_SHOP_ID = "102e6445-6462-4cb6-bcbf-e9dd43a70b7e";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
-type View = "home" | "scanner" | "inventory" | "orders" | "cart" | "proforma";
+type View = "home" | "scanner" | "inventory" | "orders" | "cart" | "proforma" | "login";
 
 export default function App() {
-  //const [currentView, setCurrentView] = useState<View>("scanner");
   const [clientCarts, setClientCarts] = useState<ClientCart[]>([]);
   const [activeCartId, setActiveCartId] = useState<string | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -39,104 +39,135 @@ export default function App() {
   const [showClientDialog, setShowClientDialog] = useState(false);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
   const [pendingQuantity, setPendingQuantity] = useState<number>(1); // New state
+  const [pendingAttribute, setPendingAttribute] = useState<string>("None");
   const [newClientName, setNewClientName] = useState("");
   const [editingPI, setEditingPI] = useState<ProformaInvoice | null>(null);
   // Compute proformaOrders from orders to ensure it's always in sync
   const proformaOrders = orders.filter(o => o.status === 'pi');
   const [isLoading, setIsLoading] = useState(false);
-  const [session, setSession] = useState<any>(null);
+  //const [session, setSession] = useState<any>(null);
   const [initializing, setInitializing] = useState(true);
   // Keep your existing View state, but we'll add a "home" view
-  const [currentView, setCurrentView] = useState<View | "home">("home");
+  //const [currentView, setCurrentView] = useState<View | "home">("home");
+  //const [currentView, setCurrentView] = useState<View | "home" | "login">("login");
+  const [currentView, setCurrentView] = useState<View>("login");
   const [inventoryLoaded, setInventoryLoaded] = useState(false);
   const [activeCartLoaded, setActiveCartLoaded] = useState(false);
   const [ordersLoaded, setOrdersLoaded] = useState(false);
+  const [clientPhone, setClientPhone] = useState("");
+  const [referralSource, setReferralSource] = useState("");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [session, setSession] = useState<Session | null>(null);
+  const bootstrapDoneRef = useRef(false);
+  const [inventoryReady, setInventoryReady] = useState(false);
 
-    useEffect(() => {
-      // 1. Initial Session Check
-      // This runs once when the app loads to see if the user is already logged in
-      const checkInitialSession = async () => {
-        try {
-          const { data: { session } } = await supabase.auth.getSession();
-          setSession(session);
-        } catch (error) {
-          console.error("Error checking session:", error);
-        } finally {
-          // Once we have checked (success or fail), we stop the loading state
-          setInitializing(false);
-        }
-      };
+  const activeCart = clientCarts.find((cart) => cart.id === activeCartId);
+  const [autoDownloadPIId, setAutoDownloadPIId] = useState<string | null>(null);
 
-      checkInitialSession();
 
-      // 2. Auth State Listener
-      // This is vital for the Invitation Flow. When a user clicks the email link,
-      // Supabase updates the auth state, and this listener detects it to log them in.
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-        setSession(session);
-        
-        // Optional: If you want to automatically redirect to home on login
-        if (session) {
+  //chatgpt
+useEffect(() => {
+  const checkInitialSession = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      setSession(session);
+    } catch (error) {
+      console.error("Error checking session:", error);
+    } finally {
+      setInitializing(false);
+    }
+  };
+
+  checkInitialSession();
+
+  const { data: { subscription } } =
+    supabase.auth.onAuthStateChange(
+      (_event, newSession: Session | null) => {
+
+        setSession((prev: Session | null) => {
+          if (prev?.access_token === newSession?.access_token) {
+            return prev; // prevent useless rerender
+          }
+          return newSession;
+        });
+
+        if (newSession && currentView === "login") {
           setCurrentView("home");
         }
-      });
+      }
+    );
 
-      // 3. Cleanup
-      // Unsubscribe from the listener when the component unmounts to prevent memory leaks
-      return () => {
-        subscription.unsubscribe();
-      };
-    }, []);
+  return () => subscription.unsubscribe();
+}, []);
 
-    // NEW: Data Fetching Effect
-    useEffect(() => {
-      // Only fetch data if we have an active session
-      if (!session) return;
-      setSearchResult(null);     // Clears the scanner card
-      setPendingQuantity(1);     // Resets internal stepper
-      setNewClientName("");      // Clears dialog input
-      // -----------------------------
-      const loadData = async () => {
-        switch (currentView) {
-          case "inventory":
-            await handleLoadInventory();
-            break;
-          case "cart":
-            if (clientCarts.length === 0) {
-              await handleLoadActiveCarts();
-            }
-            break;
-          case "proforma":
-            await handleLoadProformaInvoices();
-            break;
-          case "orders":
-            try {
-              const data = await apiCall(`${API_BASE_URL}/orders/list/${PRESELECTED_SHOP_ID}`);
-              
-              const mappedOrders: Order[] = data.map((o: any) => ({
-                id: o.id,
-                orderNumber: o.id.slice(0, 8).toUpperCase(), // Using ID snippet as Order #
-                customerName: o.client_name || "Unknown",
-                total: o.final_total || 0,
-                status: o.status,
-                date: new Date(o.created_at).toLocaleDateString(),
-                discount: o.discount_percent || 0,
-                paidAmount: o.paid_amount || 0
-              }));
-              
-              setOrders(mappedOrders);
-            } catch (error) {
-              console.error("Failed to load orders:", error);
-            }
-            break;
-          default:
-            // 'home' or 'scanner' might not need an initial API call
-            break;
-        }
-      };
+  useEffect(() => {
+    if (!session) return;
+    if (bootstrapDoneRef.current) return;
 
-      loadData();
-    }, [currentView, session]); // This effect "watches" these two variables
+    bootstrapDoneRef.current = true;
+
+    const bootstrap = async () => {
+      await handleLoadInventory();
+      setInventoryReady(true);
+    };
+
+    bootstrap();
+  }, [session]);
+
+  useEffect(() => {
+  if (!session) return;
+
+  const loadViewData = async () => {
+    try {
+      switch (currentView) {
+
+        case "cart":
+          if (!activeCartLoaded) {
+            await handleLoadActiveCarts();
+          }
+          break;
+
+        case "proforma":
+          await handleLoadProformaInvoices();
+          break;
+
+        case "orders":
+          if (orders.length === 0) {
+            const data = await apiCall(
+              `${API_BASE_URL}/orders/list/${PRESELECTED_SHOP_ID}`
+            );
+
+            const mappedOrders = data.map((o: any) => ({
+              id: o.id,
+              orderNumber: o.id.slice(0, 8).toUpperCase(),
+              customerName: o.client_name || "Unknown",
+              total: o.final_total || 0,
+              status: o.status,
+              date: new Date(o.created_at).toLocaleDateString(),
+              discount: o.discount_percent || 0,
+              paidAmount: o.paid_amount || 0,
+              discountAmount: o.discount_amount || 0,
+              taxAmount: o.tax_amount || 0
+            }));
+
+            setOrders(mappedOrders);
+          }
+          break;
+      }
+    } catch (error) {
+      console.error("View data load failed:", error);
+    }
+  };
+
+  // reset scanner UI when navigating
+  setSearchResult(null);
+  setPendingQuantity(1);
+  setNewClientName("");
+
+  loadViewData();
+
+}, [currentView]);
+
 
   const apiCall = async (url: string, options?: RequestInit) => {
     setIsLoading(true);
@@ -191,7 +222,8 @@ export default function App() {
 
       // 3. Fetch details for each active bucket
       const cartPromises = activeBuckets.map(async (order: any) => {
-        const details = await apiCall(`${API_BASE_URL}/basket/details/${order.id}`);
+      const details = await apiCall(`${API_BASE_URL}/basket/details/${order.id}`);
+      console.log("Details for order ID:", handleLoadActiveCarts);
 
         return {
           id: order.id,
@@ -237,7 +269,9 @@ export default function App() {
         date: new Date(o.created_at).toLocaleDateString(),
         discount: o.discount_percent || 0,
         items: [],
-        paidAmount: o.paid_amount || 0
+        paidAmount: o.paid_amount || 0,
+        discountAmount: o.discount_amount || 0,
+        taxAmount: o.tax_amount || 0
       }));
       
       setOrders(mappedOrders);
@@ -261,6 +295,8 @@ export default function App() {
         status: o.status,
         date: new Date(o.created_at).toLocaleDateString(),
         discount: o.discount_percent || 0,
+        discountAmount: o.discount_amount || 0,
+        taxAmount: o.tax_amount || 0,
         items: []
       }));
       
@@ -270,7 +306,8 @@ export default function App() {
     }
   };
 
-    const handleProductSearch = async (code: string) => {
+  const handleProductSearch = async (code: string) => {
+    if (!inventoryReady) return;   
     if (!code.trim()) return;
     // PREVENT LOOP: Don't search if the result is already for this code
     if (searchResult && searchResult.barcode === code) return;
@@ -301,23 +338,37 @@ export default function App() {
     }
   };
 
-  const activeCart = clientCarts.find((cart) => cart.id === activeCartId);
-
-  const handleAddToCart = async (product: Product, quantity: number = 1) => {
+const handleAddToCart = async (product: Product, quantity: number = 1, attribute: string) => {
     // 1. If no active cart, show dialog to select or create cart
     if (!activeCartId) {
       setPendingProduct(product);
-      setPendingQuantity(quantity); // Save the stepped-up value
+      setPendingQuantity(quantity); 
+      setPendingAttribute(attribute); // Ensure this state is defined in App.tsx
       setShowClientDialog(true);
       return;
     }
 
     try {
-      // 2. Prepare the payload for main.py
+      // Find existing item to get current metadata for merging
+      const currentCart = clientCarts.find(c => c.id === activeCartId);
+      const existingItem = currentCart?.items.find(i => i.id === product.id);
+      
+      // LOGIC: Prepare the JSON metadata
+      let metadata = [...(existingItem?.attribute_metadata || [])];
+      const existingAttrIndex = metadata.findIndex(m => m.label === attribute);
+
+      if (existingAttrIndex > -1) {
+        metadata[existingAttrIndex].qty += quantity; // SOP: Merge (e.g., 2 + 1 = 3)
+      } else {
+        metadata.push({ label: attribute, qty: quantity }); // SOP: New location entry
+      }
+
+      // 2. Prepare the payload for your correct /basket/add endpoint
       const payload = {
-        order_id: activeCartId, // The UUID of the order/basket
+        order_id: activeCartId,
         product_id: product.id,
-        qty: quantity
+        qty: quantity, // The backend likely handles the increment, but we send the change
+        attribute_metadata: metadata // We pass the updated breakdown here
       };
 
       await apiCall(`${API_BASE_URL}/basket/add`, {
@@ -326,7 +377,7 @@ export default function App() {
         body: JSON.stringify(payload),
       });
 
-      // 3. Update local UI state only after successful API response
+      // 3. Update local UI state
       setClientCarts((prev) =>
         prev.map((cart) => {
           if (cart.id !== activeCartId) return cart;
@@ -336,21 +387,33 @@ export default function App() {
             return {
               ...cart,
               items: cart.items.map((item) =>
-                item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+                item.id === product.id 
+                  ? { ...item, quantity: item.quantity + quantity, attribute_metadata: metadata } 
+                  : item
               ),
             };
           } else {
             return {
               ...cart,
-              items: [...cart.items, { id: product.id, name: product.name, price: product.price, quantity: 1, stock: product.stock }],
+              items: [
+                ...cart.items, 
+                { 
+                  id: product.id, 
+                  name: product.name, 
+                  price: product.price, 
+                  quantity: quantity, 
+                  stock: product.stock,
+                  attribute_metadata: metadata 
+                }
+              ],
             };
           }
         })
       );
       
-      toast.success(`Added ${quantity} units of ${product.name}`);
-      setSearchResult(null);      // Removes the result card from UI
-      setPendingQuantity(1);      // Resets the count for the NEXT scan
+      toast.success(`Added ${quantity} units to ${attribute}`);
+      setSearchResult(null);      
+      setPendingQuantity(1);      
 
     } catch (error) {
       console.error("Cart API Error:", error);
@@ -358,9 +421,10 @@ export default function App() {
     }
   };
 
-
   const handleCreateCart = async (clientName: string, quantity: number = 1) => {
     try {
+      // Create the metadata array for the first item being added
+      const initialMetadata = [{ label: pendingAttribute || "None", qty: quantity }];
       // 1. Single API call creates both the Order and the first Item
       const data = await apiCall(`${API_BASE_URL}/basket/create`, {
         method: "POST",
@@ -369,7 +433,11 @@ export default function App() {
           shop_id: PRESELECTED_SHOP_ID,
           client_name: clientName,
           initial_product_id: pendingProduct?.id, // Pass the scanned item ID
-          qty: quantity // Send the actual quantity selected in the stepper
+          qty: quantity, // Send the actual quantity selected in the stepper
+          client_phone: clientPhone || null,        // Match interface
+          referral_source: referralSource,  // Match interface
+          delivery_address: deliveryAddress || null, // Match interface
+          attribute_metadata: initialMetadata
         }),
       });
 
@@ -379,13 +447,17 @@ export default function App() {
         name: pendingProduct.name, 
         price: pendingProduct.price, 
         quantity: quantity,
-        stock: pendingProduct.stock 
+        stock: pendingProduct.stock,
+        attribute_metadata: initialMetadata
       }] : [];
 
       // 3. Construct the full Cart object once
       const newCart: ClientCart = {
         id: data.order_id,
         clientName: data.client_name,
+        clientPhone: clientPhone,
+        referralSource: referralSource,
+        deliveryAddress: deliveryAddress || "",
         items: initialItems,
         createdAt: new Date().toISOString(),
         discount: 0, 
@@ -395,9 +467,13 @@ export default function App() {
       // 4. Update all states in a single batch
       setClientCarts((prev) => [...prev, newCart]);
       setActiveCartId(data.order_id);
+      setClientPhone("");
+      setReferralSource("");
+      setDeliveryAddress("");
       setSearchResult(null);
       setPendingQuantity(1);
       setPendingProduct(null);
+      setPendingAttribute("None");
       setShowClientDialog(false); // Close the dialog
       
       toast.success(`Session started for ${clientName}${pendingProduct ? ` with ${pendingProduct.name}` : ''}`);
@@ -414,8 +490,11 @@ export default function App() {
     // If there was a pending product, add it now
     if (pendingProduct) {
       setTimeout(() => {
-        handleAddToCart(pendingProduct, pendingQuantity);
+        handleAddToCart(pendingProduct, pendingQuantity, pendingAttribute);
+        // Cleanup pending states
         setPendingProduct(null);
+        setPendingQuantity(1);
+        setPendingAttribute("None"); // Reset to default
       }, 100);
     }
   };
@@ -535,10 +614,11 @@ export default function App() {
   const handleCheckout = async () => {
     if (!activeCartId) return;
 
-    // 1. Find the active cart to get its specific discount
     const activeCart = clientCarts.find((c) => c.id === activeCartId);
-    // FINAL VALIDATION: Check stock one last time before calling API
-    const hasShortage = activeCart?.items.some(item => {
+    if (!activeCart) return;
+
+    // 1. FINAL VALIDATION: Check stock one last time
+    const hasShortage = activeCart.items.some(item => {
       const masterProduct = products.find(p => p.id === item.id);
       const available = masterProduct ? (masterProduct.displayStock + masterProduct.godownStock) : 0;
       return item.quantity > available;
@@ -546,29 +626,39 @@ export default function App() {
 
     if (hasShortage) {
       toast.error("Cannot finalize sale: One or more items exceed available stock.");
-      return; // Stop the execution here
+      return;
     }
     
-    // 2. Extract values and ensure they are numbers, not objects or undefined
-    const d = Number(activeCart?.discount) || 0; 
-    const t = activeCart?.tax !== undefined ? Number(activeCart.tax) : 18;
-    const paid = activeCart?.advancePaid || 0;
+    // 2. Prepare the Request Body (JSON)
+    // We include all the metadata that was previously being lost
+    const payload = {
+      order_id: activeCartId,
+      discount_percent: Number(activeCart.discount) || 0,
+      tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 18,
+      paid_amount: Number(activeCart.advancePaid) || 0,
+      referral_source: activeCart.referralSource || "",
+      delivery_address: activeCart.deliveryAddress || "",
+      client_phone: activeCart.clientPhone || ""
+    };
 
     try {
-      // 3. Send the clean numbers to the backend
-      await apiCall(
-        `${API_BASE_URL}/order/finalize-sale?order_id=${activeCartId}&discount=${d}&tax=${t}&paid_amount=${paid}`,
-        { method: "POST" }
-      );
+      // 3. Send data in the BODY instead of the URL
+      await apiCall(`${API_BASE_URL}/order/finalize-sale`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
 
-      toast.success(`Sale finalized! Stock levels updated. Paid: ₹${paid}`);
-      // REFRESH INVENTORY: After a sale, we MUST re-fetch products to see the new stock
+      toast.success(`Sale finalized! Paid: ₹${payload.paid_amount}`);
+      
+      // Refresh and Reset state
       await handleLoadInventory();
       setActiveCartId(null);
       setClientCarts((prev) => prev.filter((c) => c.id !== activeCartId));
       setCurrentView("orders");
     } catch (error) {
-      // apiCall handles the error toast automatically
       console.error("Checkout error:", error);
     }
   };
@@ -588,7 +678,11 @@ export default function App() {
           paidAmount: o.paid_amount || 0,
           status: o.status,
           date: new Date(o.created_at).toLocaleDateString(),
-          discount: o.discount_percent || 0
+          discount: o.discount_percent || 0,
+          discountAmount: o.discount_amount || 0,
+          taxAmount: o.tax_amount || 0,
+          photo_url: o.photo_url || "",
+          attribute_metadata: o.attribute_metadata || []
         }));
         
         setOrders(mappedOrders);
@@ -599,7 +693,10 @@ export default function App() {
       const mappedItems = apiData.order_items.map((item: any) => ({
         name: item.item_code,
         quantity: item.quantity,
-        price: item.unit_price
+        price: item.unit_price,
+       // photo_url: item.photo_url,           // Ensure this field is mapped
+        attribute_metadata: item.attribute_metadata || [], // Ensure this field is mapped
+        photo_url: item.photo_url || item.product?.photo_url
       }));
 
       setOrders((prev) => {
@@ -612,7 +709,10 @@ export default function App() {
             discount_percent: apiData.discount_percent,
             tax_percent: apiData.tax_percent,
             tax_amount: apiData.tax_amount,
-            final_total: apiData.final_total
+            final_total: apiData.final_total,
+            clientPhone: apiData.client_phone,        
+            referralSource: apiData.referral_source, 
+            deliveryAddress: apiData.delivery_address
           } : o
         );
       });
@@ -662,47 +762,111 @@ export default function App() {
     }
   };
 
-  const handleGeneratePI = async () => {
-    if (!activeCartId) return;
-    // Store the ID in a local variable so we don't lose it during state updates
-    const cartIdToConvert = activeCartId;
+  const handleSaveCart = async () => {
+    if (!activeCartId || !activeCart) return;
     try {
-      // Extract discount and tax values, same as handleCheckout
-      const d = Number(activeCart?.discount) || 0;
-      const t = activeCart?.tax !== undefined ? Number(activeCart.tax) : 18;
-      const paid = activeCart?.advancePaid || 0; // Capture the payment value
-
-      // Update order status to 'pi' in backend
-       await apiCall(`${API_BASE_URL}/order/update-status`, {
+      await apiCall(`${API_BASE_URL}/order/update-status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           order_id: activeCartId, 
-          status: "pi",
-          discount_percent: d,
-          tax_percent: t,
-          paid_amount: paid // ADD THIS LINE
+          status: "bucket", // Keep as active bucket
+          discount_percent: Number(activeCart.discount) || 0,
+          tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 18,
+          paid_amount: activeCart.advancePaid || 0,
+          referral_source: activeCart.referralSource || "",
+          delivery_address: activeCart.deliveryAddress || "",
+          client_phone: activeCart.clientPhone || ""
+        }),
+      });
+      toast.success("Progress saved to database");
+    } catch (error) {
+      console.error("Save failed:", error);
+    }
+  };
+
+  // const handleGeneratePI = async () => {
+  //   if (!activeCartId) return;
+  //   // Store the ID in a local variable so we don't lose it during state updates
+  //   const cartIdToConvert = activeCartId;
+  //   try {
+  //     // Extract discount and tax values, same as handleCheckout
+  //     const d = Number(activeCart?.discount) || 0;
+  //     const t = activeCart?.tax !== undefined ? Number(activeCart.tax) : 18;
+  //     const paid = activeCart?.advancePaid || 0; // Capture the payment value
+
+  //     // Update order status to 'pi' in backend
+  //      await apiCall(`${API_BASE_URL}/order/update-status`, {
+  //       method: "POST",
+  //       headers: { "Content-Type": "application/json" },
+  //       body: JSON.stringify({ 
+  //         order_id: activeCartId, 
+  //         status: "pi",
+  //         discount_percent: d,
+  //         tax_percent: t,
+  //         paid_amount: paid,
+  //         referral_source: activeCart?.referralSource || "",
+  //         delivery_address: activeCart?.deliveryAddress || "",
+  //         client_phone: activeCart?.clientPhone || ""
+  //       }),
+  //     });
+
+  //     toast.success(`Proforma Invoice Generated for ${activeCart?.clientName}!`);
+
+  //     // 1. Remove from the list first using the local variable
+  //     setClientCarts((prev) => prev.filter((c) => c.id !== cartIdToConvert));
+  //     setCurrentView("proforma"); // Switch view first to avoid render crashes
+  //     // 2. Clear the selection
+  //     setActiveCartId(null); 
+      
+  //   } catch (error) {
+  //     toast.error("Failed to generate PI");
+  //   }
+  // };
+
+  // 3. Updated Generate PI (Save + Convert + Trigger Download)
+  const handleGeneratePI = async () => {
+    if (!activeCartId || !activeCart) return;
+    const cartIdToConvert = activeCartId;
+    
+    try {
+      // A. Update status and metadata
+      await apiCall(`${API_BASE_URL}/order/update-status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          order_id: cartIdToConvert, 
+          status: "pi", // Move to PI list
+          discount_percent: Number(activeCart.discount) || 0,
+          tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 18,
+          paid_amount: activeCart.advancePaid || 0,
+          referral_source: activeCart.referralSource || "",
+          delivery_address: activeCart.deliveryAddress || "",
+          client_phone: activeCart.clientPhone || ""
         }),
       });
 
-      toast.success(`Proforma Invoice Generated for ${activeCart?.clientName}!`);
+      // B. Pre-fetch details (photos/attributes) so PDF is ready immediately
+      await fetchOrderItems(cartIdToConvert);
 
-      // 1. Remove from the list first using the local variable
+      // C. Clean up state and switch view
       setClientCarts((prev) => prev.filter((c) => c.id !== cartIdToConvert));
-      // 2. Clear the selection
-      setActiveCartId(null); 
-      // 3. Navigate away
+      setActiveCartId(null);
       setCurrentView("proforma");
       
+      // D. Trigger the download state
+      setAutoDownloadPIId(cartIdToConvert); 
+      toast.success("PI Generated! Starting download...");
     } catch (error) {
       toast.error("Failed to generate PI");
     }
   };
-
+  
   const handleEditPI = async (pi: ProformaInvoice) => {
     try {
       // 1. Fetch fresh items directly from the source to ensure they exist
       const data = await apiCall(`${API_BASE_URL}/basket/details/${pi.id}`);
+      console.log("API Response:", data)
       
       // 2. Map the backend items to CartItem format
       const freshItems = data.order_items.map((item: any) => ({
@@ -710,7 +874,7 @@ export default function App() {
         name: item.item_code,
         price: item.unit_price,
         quantity: item.quantity,
-        stock: 0 // Placeholder stock for editing
+        attribute_metadata: item.attribute_metadata || []
       }));
 
       // 3. Create or Update the Cart session
@@ -718,10 +882,13 @@ export default function App() {
         id: pi.id,
         clientName: pi.clientName,
         items: freshItems,
-        discount: pi.discount || 0,
+        discount: data.discount_percent || 0,
+        tax: data.tax_percent || 18,
+        advancePaid: data.paid_amount || 0,
+        referralSource: data.referral_source || "",
+        deliveryAddress: data.delivery_address || "",
+        clientPhone: data.client_phone || "",
         createdAt: pi.createdAt,
-        tax: 18,
-        advancePaid: pi.paidAmount || 0
       };
 
       setClientCarts((prev) => {
@@ -785,6 +952,18 @@ export default function App() {
     }
   };
 
+  const handleUpdateCartMetadata = (field: keyof ClientCart, value: string) => {
+    if (!activeCartId) return;
+
+    setClientCarts((prevCarts) =>
+      prevCarts.map((cart) =>
+        cart.id === activeCartId 
+          ? { ...cart, [field]: value } 
+          : cart
+      )
+    );
+  };
+
   // Handle Loading State
   if (initializing) return <GlobalLoader />;
 
@@ -798,7 +977,8 @@ export default function App() {
     return (
       <>
         <Toaster />
-        <HomeScreen onNavigate={(view: any) => setCurrentView(view)} />
+        <HomeScreen onNavigate={(view: any) => setCurrentView(view)} 
+          cartCount={clientCarts.length}/>
       </>
     );
   }
@@ -818,9 +998,9 @@ export default function App() {
       {isLoading && <GlobalLoader />}
 
       {/* 1. THE HOMESCREEN VIEW: No header, full-screen dashboard */}
-      {currentView === "home" ? (
+      {(currentView as string) === "home" ? (
         <HomeScreen 
-          onNavigate={(view) => setCurrentView(view)} 
+          onNavigate={(view) => setCurrentView(view as View)} 
           cartCount={clientCarts.length} 
         />
       ) : (
@@ -862,7 +1042,7 @@ export default function App() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-8">
-        {currentView === "scanner" && (
+        {currentView === "scanner" && inventoryReady && (
           <div>
             {activeCart && (
               <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
@@ -874,10 +1054,10 @@ export default function App() {
                 </p>
               </div>
             )}
-            <Scanner products={products} onAddToCart={handleAddToCart} onProductSearch={handleProductSearch} searchResult={searchResult} />
+            <Scanner products={products || []} onAddToCart={handleAddToCart} onProductSearch={handleProductSearch} searchResult={searchResult} />
           </div>
         )}
-        {currentView === "inventory" && <Inventory products={products} />}
+        {currentView === "inventory" && <Inventory products={products as unknown as ExtendedProduct[]} />}
         {currentView === "orders" && <Orders orders={orders} onFetchDetails={fetchOrderItems} onRecordPayment={handleRecordPayment} />}
         {currentView === "cart" && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -890,6 +1070,7 @@ export default function App() {
             />
             <Cart
               items={activeCart?.items || []}
+              products={products}
               clientName={activeCart?.clientName || null}
               discount={activeCart?.discount || 0}
               activeCart={activeCart}
@@ -900,7 +1081,11 @@ export default function App() {
               onUpdateDiscount={handleUpdateDiscount}
               updateCartTax={updateCartTax}
               onGeneratePI={handleGeneratePI}
+              onSaveCart={handleSaveCart}
               onUpdateAdvance={handleUpdateAdvance}
+              onUpdateAddress={(val) => handleUpdateCartMetadata('deliveryAddress', val)} //
+              onUpdatePhone={(val) => handleUpdateCartMetadata('clientPhone', val)}       //
+              onUpdateReferral={(val) => handleUpdateCartMetadata('referralSource', val)} //
             />
           </div>
         )}
@@ -911,9 +1096,9 @@ export default function App() {
               id: o.id,
               piNumber: o.orderNumber,
               clientName: o.customerName,
-              items: o.items,
+              items: o.items || [],
               discount: o.discount || 0,
-              status: "draft", // Default UI display status
+              status: o.status as any,
               createdAt: o.date,
               updatedAt: o.date,
               subtotal: o.subtotal,
@@ -923,7 +1108,10 @@ export default function App() {
               tax_amount: o.tax_amount,
               final_total: o.final_total,
               paidAmount: o.paidAmount || 0,
-              total: o.total
+              total: o.total,
+              clientPhone: o.clientPhone,        
+              referralSource: o.referralSource, 
+              deliveryAddress: o.deliveryAddress
             }))
             }
             onEditPI={handleEditPI}
@@ -931,6 +1119,8 @@ export default function App() {
             onDeletePI={handleCloseCart}
             onUpdateStatus={handleUpdatePIStatus}
             onFetchDetails={fetchOrderItems} // Pass the item fetcher here too!
+            initialDownloadId={autoDownloadPIId} // Add this prop
+            onClearInitialDownload={() => setAutoDownloadPIId(null)} // Add this prop
           />
         )}
       </main>
@@ -970,16 +1160,48 @@ export default function App() {
                 </div>
               </div>
             )}
-            <div>
-              <h4 className="text-sm font-medium mb-2">New Cart</h4>
-              <Input
-                type="text"
-                placeholder="Enter client name..."
-                value={newClientName}
-                onChange={(e) => setNewClientName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
-                autoFocus
-              />
+            <div className="space-y-3">
+              <h4 className="text-sm font-medium border-b pb-1">New Cart</h4>
+              
+              {/* Primary Field: Client Name */}
+              <div>
+                <Label className="text-[10px] uppercase font-bold text-gray-400">Client Name *</Label>
+                <Input
+                  type="text"
+                  placeholder="Enter client name..."
+                  value={newClientName}
+                  onChange={(e) => setNewClientName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
+                  autoFocus
+                  className="mt-1"
+                />
+              </div>
+
+              {/* Secondary Row: Domain-Agnostic Optional Fields */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-[10px] uppercase font-bold text-gray-400">Phone</Label>
+                  <Input
+                    type="tel"
+                    placeholder="Contact number"
+                    value={clientPhone} // Ensure this state is defined
+                    onChange={(e) => setClientPhone(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
+                    className="mt-1 text-sm"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[10px] uppercase font-bold text-gray-400">Referral / Partner</Label>
+                  <Input
+                    type="text"
+                    placeholder="Designer, Agent, etc."
+                    value={referralSource} // Use 'referralSource' for domain flexibility
+                    onChange={(e) => setReferralSource(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
+                    className="mt-1 text-sm"
+                  />
+                </div>
+              </div>
             </div>
           </div>
           <DialogFooter>

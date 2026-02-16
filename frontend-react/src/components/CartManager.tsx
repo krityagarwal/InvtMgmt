@@ -16,6 +16,9 @@ import { CartItem } from "./Cart";
 export interface ClientCart {
   id: string;
   clientName: string;
+  clientPhone?: string;        // Optional
+  referralSource?: string; // Optional
+  deliveryAddress?: string;      // Optional
   items: CartItem[];
   discount: number;
   createdAt: string;

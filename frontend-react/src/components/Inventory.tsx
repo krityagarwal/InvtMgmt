@@ -317,7 +317,7 @@ import {
 } from "./ui/table";
 import { Product } from "./Scanner";
 
-interface ExtendedProduct extends Product {
+export interface ExtendedProduct extends Product {
   costPrice: number;
   overheadPrice: number;
   remark: string;
