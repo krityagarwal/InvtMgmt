@@ -1,22 +1,21 @@
 import json
 import os
 import urllib
-from fastapi import FastAPI, Query
-from fastapi import Body
+from fastapi import FastAPI, Query, Body, APIRouter, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from typing import Any, Optional, Dict, List
 import psycopg2  # <--- This is the missing line
 from psycopg2.extras import RealDictCursor
 import urllib.parse
-from fastapi.staticfiles import StaticFiles
 import mimetypes
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from fastapi import HTTPException
 import logging
 from config import get_db_conn
 from datetime import datetime
+from typing import Dict, Any
 
 load_dotenv()
 
@@ -113,41 +112,64 @@ async def get_inventory(shop_id: str):
                 return cur.fetchall()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.patch("/inventory/{product_id}")
+async def update_inventory_item(product_id: str, updates: Dict[str, Any] = Body(...)):
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields provided for update")
 
+    try:
+        with get_db_conn() as conn:
+            with conn.cursor() as cur:
+                # 1. Build the dynamic SET clause
+                # Filter out keys that aren't valid columns to prevent SQL injection
+                allowed_cols = {
+                    "item_code", "selling_price", "cost_price", 
+                    "overhead_expense", "remark", "vendor_name", 
+                    "photo_url", "qty_display", "qty_godown", "category_id"
+                }
+                
+                # Create a list of "column = %s" strings
+                set_parts = []
+                values = []
+                
+                for key, value in updates.items():
+                    if key in allowed_cols:
+                        set_parts.append(f"{key} = %s")
+                        values.append(value)
+                
+                if not set_parts:
+                    raise HTTPException(status_code=400, detail="No valid fields provided")
+
+                # 2. Finalize the query with updated_at
+                set_clause = ", ".join(set_parts)
+                query = f"""
+                    UPDATE products 
+                    SET {set_clause}, updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = %s 
+                    RETURNING id
+                """
+                
+                # Append product_id to values for the WHERE clause
+                values.append(product_id)
+                
+                cur.execute(query, tuple(values))
+                conn.commit()
+
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Product not found")
+
+                return {"status": "success", "updated_id": product_id}
+
+    except Exception as e:
+        print(f"Update Error: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 class BasketItem(BaseModel):
     order_id: str  # Changed from shop_id to order_id
     product_id: str
     qty: int = 1
     attribute_metadata: Optional[List[Dict[str, Any]]] = []
-
-# @app.post("/basket/add")
-# async def add_to_basket(item: BasketItem):
-#     try:
-#         with get_db_conn() as conn:
-#             with conn.cursor() as cur:
-#                 # 1. Get Product Price
-#                 cur.execute("SELECT selling_price FROM products WHERE id = %s", (item.product_id,))
-#                 res = cur.fetchone()
-#                 if not res: 
-#                     raise HTTPException(status_code=404, detail="Product not found")
-#                 price = res['selling_price']
-
-#                 # 2. Add or Update the item in the specific basket (order_id)
-#                 # We use ON CONFLICT to increase quantity if the item is already in the basket
-#                 cur.execute("""
-#                     INSERT INTO order_items (order_id, product_id, quantity, unit_price)
-#                     VALUES (%s, %s, %s, %s)
-#                     ON CONFLICT (order_id, product_id) DO UPDATE 
-#                     SET quantity = order_items.quantity + EXCLUDED.quantity
-#                 """, (item.order_id, item.product_id, item.qty, price))
-#                 # Recalculate after adding new item
-#                 update_order_total(cur, item.order_id)
-#                 conn.commit()
-#                 return {"status": "success", "message": "Item added to session"}
-#     except Exception as e:
-#         logger.error(f"Error adding to basket: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/basket/add")
 async def add_to_basket(item: BasketItem):

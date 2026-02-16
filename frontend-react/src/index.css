@@ -1465,3 +1465,8 @@ html {
     background-color: white !important;
   }
 }
+
+/* Hide Chrome/Safari/Edge/Firefox number spinners */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type=number] { -moz-appearance: textfield; appearance: textfield; }

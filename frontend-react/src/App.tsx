@@ -42,14 +42,9 @@ export default function App() {
   const [pendingAttribute, setPendingAttribute] = useState<string>("None");
   const [newClientName, setNewClientName] = useState("");
   const [editingPI, setEditingPI] = useState<ProformaInvoice | null>(null);
-  // Compute proformaOrders from orders to ensure it's always in sync
   const proformaOrders = orders.filter(o => o.status === 'pi');
   const [isLoading, setIsLoading] = useState(false);
-  //const [session, setSession] = useState<any>(null);
   const [initializing, setInitializing] = useState(true);
-  // Keep your existing View state, but we'll add a "home" view
-  //const [currentView, setCurrentView] = useState<View | "home">("home");
-  //const [currentView, setCurrentView] = useState<View | "home" | "login">("login");
   const [currentView, setCurrentView] = useState<View>("login");
   const [inventoryLoaded, setInventoryLoaded] = useState(false);
   const [activeCartLoaded, setActiveCartLoaded] = useState(false);
@@ -65,7 +60,7 @@ export default function App() {
   const [autoDownloadPIId, setAutoDownloadPIId] = useState<string | null>(null);
 
 
-  //chatgpt
+//chatgpt
 useEffect(() => {
   const checkInitialSession = async () => {
     try {
@@ -185,6 +180,81 @@ useEffect(() => {
       setIsLoading(false);
     }
   };
+
+  // Inside App.tsx
+  const handleUpdateInventory = async (updatedProduct: any) => {
+    const original = products.find(p => p.id === updatedProduct.id);
+    if (!original) return;
+
+    const patchPayload: any = {};
+    
+    if (updatedProduct.barcode !== original.barcode) patchPayload.item_code = updatedProduct.barcode;
+    if (updatedProduct.selling_price !== original.selling_price) patchPayload.selling_price = updatedProduct.selling_price;
+    if (updatedProduct.cost_price !== original.cost_price) patchPayload.cost_price = updatedProduct.cost_price;
+    if (updatedProduct.vendor !== original.vendor) patchPayload.vendor_name = updatedProduct.vendor;
+    if (updatedProduct.photo_url !== original.photo_url) patchPayload.photo_url = updatedProduct.photo_url;
+    if (updatedProduct.displayStock !== original.displayStock) patchPayload.qty_display = updatedProduct.displayStock;
+    if (updatedProduct.godownStock !== original.godownStock) patchPayload.qty_godown = updatedProduct.godownStock;
+    if (updatedProduct.remark !== original.remark) patchPayload.remark = updatedProduct.remark;
+
+    if (Object.keys(patchPayload).length === 0) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/inventory/${updatedProduct.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patchPayload),
+      });
+
+      if (!response.ok) throw new Error("Update failed");
+
+      // Sync the global state
+      setProducts(prev => prev.map(p => 
+        p.id === updatedProduct.id ? { ...p, ...updatedProduct } : p
+      ));
+      
+      toast.success("Inventory updated");
+    } catch (error) {
+      toast.error("Failed to save changes");
+    }
+  };
+
+const handleBulkAdd = async (newItems: any[]) => {
+  try {
+    // Transform rows for the backend
+    const payload = newItems.map(item => ({
+      shop_id: PRESELECTED_SHOP_ID,
+      // item.category_id already contains the UUID from the dropdown
+      category_id: item.category_id || null, 
+      item_code: item.item_code,
+      image_url: item.photo_url || "",
+      cost_price: parseFloat(item.cost_price) || 0,
+      overhead: parseFloat(item.overhead) || 0,
+      unit_price: parseFloat(item.unit_price) || 0,
+      vendor_name: item.vendor_name || "",
+      display_qty: parseInt(item.display_qty) || 0,
+      godown_qty: parseInt(item.godown_qty) || 0
+    }));
+
+    const response = await fetch(`${API_BASE_URL}/inventory/bulk-add`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error("Server Error Detail:", errorData.detail);
+      throw new Error("Bulk add failed");
+    }
+
+    toast.success("Inventory synced successfully!");
+    handleLoadInventory(); // Refresh the main list
+  } catch (error) {
+    console.error(error);
+    toast.error("Failed to sync inventory.");
+  }
+};
 
   const handleLoadInventory = async () => {
     const data = await apiCall(`${API_BASE_URL}/inventory/${PRESELECTED_SHOP_ID}`);
@@ -789,45 +859,6 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     }
   };
 
-  // const handleGeneratePI = async () => {
-  //   if (!activeCartId) return;
-  //   // Store the ID in a local variable so we don't lose it during state updates
-  //   const cartIdToConvert = activeCartId;
-  //   try {
-  //     // Extract discount and tax values, same as handleCheckout
-  //     const d = Number(activeCart?.discount) || 0;
-  //     const t = activeCart?.tax !== undefined ? Number(activeCart.tax) : 18;
-  //     const paid = activeCart?.advancePaid || 0; // Capture the payment value
-
-  //     // Update order status to 'pi' in backend
-  //      await apiCall(`${API_BASE_URL}/order/update-status`, {
-  //       method: "POST",
-  //       headers: { "Content-Type": "application/json" },
-  //       body: JSON.stringify({ 
-  //         order_id: activeCartId, 
-  //         status: "pi",
-  //         discount_percent: d,
-  //         tax_percent: t,
-  //         paid_amount: paid,
-  //         referral_source: activeCart?.referralSource || "",
-  //         delivery_address: activeCart?.deliveryAddress || "",
-  //         client_phone: activeCart?.clientPhone || ""
-  //       }),
-  //     });
-
-  //     toast.success(`Proforma Invoice Generated for ${activeCart?.clientName}!`);
-
-  //     // 1. Remove from the list first using the local variable
-  //     setClientCarts((prev) => prev.filter((c) => c.id !== cartIdToConvert));
-  //     setCurrentView("proforma"); // Switch view first to avoid render crashes
-  //     // 2. Clear the selection
-  //     setActiveCartId(null); 
-      
-  //   } catch (error) {
-  //     toast.error("Failed to generate PI");
-  //   }
-  // };
-
   // 3. Updated Generate PI (Save + Convert + Trigger Download)
   const handleGeneratePI = async () => {
     if (!activeCartId || !activeCart) return;
@@ -1061,7 +1092,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
             <Scanner products={products || []} onAddToCart={handleAddToCart} onProductSearch={handleProductSearch} searchResult={searchResult} />
           </div>
         )}
-        {currentView === "inventory" && <Inventory products={products as unknown as ExtendedProduct[]} />}
+        {currentView === "inventory" && <Inventory products={products as unknown as ExtendedProduct[]} onUpdateInventory={handleUpdateInventory} onBulkAdd={handleBulkAdd} />}
         {currentView === "orders" && <Orders orders={orders} onFetchDetails={fetchOrderItems} onRecordPayment={handleRecordPayment} />}
         {currentView === "cart" && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
