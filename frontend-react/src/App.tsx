@@ -204,7 +204,9 @@ useEffect(() => {
       category: item.category_name || "General",
       createdAt: item.created_at, 
       photo_url: item.photo_url,
-      name: item.item_code
+      name: item.item_code,
+      cost_price: item.cost_price || 0,
+      selling_price: item.selling_price || 0
     }));
     
     setProducts(mappedProducts);
@@ -326,7 +328,9 @@ useEffect(() => {
           godownStock: item.qty_godown || 0,   // Added
           stock: (item.qty_display || 0) + (item.qty_godown || 0),
           category: item.category_name || "General", // Added
-          photo_url: item.photo_url
+          photo_url: item.photo_url,
+          cost_price: item.cost_price || 0,
+          selling_price: item.selling_price || 0
         };
         
         setSearchResult(foundProduct);

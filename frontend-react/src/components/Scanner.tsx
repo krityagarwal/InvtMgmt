@@ -38,6 +38,8 @@ export interface Product {
   overheadPrice?: number;
   remark?: string;
   createdAt?: string;
+  cost_price?: number;  
+  selling_price?: number;
 }
 
 function CameraScanner({ onScan }: { onScan: (text: string) => void; onClose: () => void }) {

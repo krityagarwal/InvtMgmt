@@ -585,6 +585,9 @@ const handlePrintLabels = () => {
                 <TableHead className="w-[80px]">QR</TableHead>
                 <TableHead>Item Details</TableHead>
                 <TableHead>Vendor</TableHead>
+                {/* NEW COLUMNS */}
+                <TableHead className="text-right">Cost Price</TableHead>
+                <TableHead className="text-right">Selling Price</TableHead>
                 <TableHead>Stock (D/G)</TableHead>
                 <TableHead>Aging</TableHead>
                 <TableHead>Remark</TableHead>
@@ -617,6 +620,12 @@ const handlePrintLabels = () => {
                     </div>
                   </TableCell>
                   <TableCell className="text-sm font-medium">{product.vendor}</TableCell>
+                  <TableCell className="text-right text-xs font-mono text-gray-500">
+                    ₹{product.cost_price?.toLocaleString() || "-"}
+                  </TableCell>
+                  <TableCell className="text-right text-xs font-mono font-bold text-blue-600">
+                    ₹{product.selling_price?.toLocaleString() || "-"}
+                  </TableCell>
                   <TableCell>
                     <div className="flex gap-1">
                       <Badge className={product.displayStock === 0 ? "bg-red-50 text-red-600 border-red-100" : "bg-green-50 text-green-700 border-green-100"}>
