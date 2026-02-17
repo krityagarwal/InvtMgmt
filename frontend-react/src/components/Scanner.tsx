@@ -375,6 +375,33 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
           </div>
         )}
         {/* Camera Dialog... */}
+        <Dialog open={isCameraOpen} onOpenChange={setIsCameraOpen}>
+          <DialogContent className="sm:max-w-md p-0 overflow-hidden bg-black border-none">
+            <DialogHeader className="p-4 bg-slate-900 border-b border-slate-800">
+              <DialogTitle className="text-white flex items-center justify-between">
+                <span>Scan Barcode</span>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => setIsCameraOpen(false)}
+                  className="text-slate-400 hover:text-white"
+                >
+                  Close
+                </Button>
+              </DialogTitle>
+            </DialogHeader>
+            
+            <div className="relative">
+              <CameraScanner 
+                onScan={(text) => {
+                  handleManualSearch(text);
+                  setIsCameraOpen(false);
+                }} 
+                onClose={() => setIsCameraOpen(false)} 
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   
