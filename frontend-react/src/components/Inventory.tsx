@@ -99,9 +99,24 @@ React.useEffect(() => {
     category: "all"
   });
 
-  const vendorOptions = React.useMemo(() => 
-    ["all", ...new Set(products.map(p => p.vendor))].sort(), 
-  [products]);
+  // const vendorOptions = React.useMemo(() => 
+  //   ["all", ...new Set(products.map(p => p.vendor))].sort(), 
+  // [products]);
+
+  const vendorOptions = React.useMemo(() => {
+  const uniqueVendors = new Set<string>();
+  
+  products.forEach(p => {
+    // 1. Check if vendor exists
+    // 2. Trim whitespace (removes hidden spaces)
+    // 3. Convert to Uppercase (ensures 'Vendor A' and 'vendor a' are seen as same)
+    if (p.vendor && p.vendor.trim() !== "" && p.vendor !== "-") {
+      uniqueVendors.add(p.vendor.trim().toUpperCase());
+    }
+  });
+
+  return ["all", ...Array.from(uniqueVendors)].sort();
+}, [products]);
 
   const filteredProducts = products.filter((product) => {
     // 1. Search Term Logic (Barcode or Vendor)
@@ -118,7 +133,11 @@ React.useEffect(() => {
     const matchesCategory = filterCategory === "all" || product.category === filterCategory;
 
     // 3. Vendor Filter Logic
-    const matchesVendor = filters.vendor === "all" || product.vendor === filters.vendor;
+    // const matchesVendor = filters.vendor === "all" || product.vendor === filters.vendor;
+
+    // Inside filteredProducts.filter()
+    const matchesVendor = filters.vendor === "all" || 
+      (product.vendor && product.vendor.trim().toUpperCase() === filters.vendor);
 
     // 4. Display Qty Numeric Logic
     const displayVal = Number(filters.displayQty.value);
