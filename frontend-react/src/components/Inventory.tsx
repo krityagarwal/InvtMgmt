@@ -7,6 +7,7 @@ import { Checkbox } from "./ui/checkbox";
 import { Button } from "./ui/button";
 import QRCode from "react-qr-code";
 import { BulkRow } from "./BulkRow";
+import Fuse from "fuse.js";
 import {
   Table,
   TableBody,
@@ -83,6 +84,14 @@ React.useEffect(() => {
     searchTerm: ""
   });
 
+  const fuse = React.useMemo(() => {
+  return new Fuse(products, {
+    keys: ["barcode"], // This matches your Product interface 'barcode' field
+    threshold: 0.3,    // Adjust for strictness (0.0 is perfect match, 1.0 is anything)
+    distance: 100
+  });
+}, [products]);
+
   const [filters, setFilters] = useState({
     displayQty: { value: "", operator: "any" }, // any, equals, gt, lt
     godownQty: { value: "", operator: "any" },
@@ -96,9 +105,14 @@ React.useEffect(() => {
 
   const filteredProducts = products.filter((product) => {
     // 1. Search Term Logic (Barcode or Vendor)
-    const matchesSearch = searchTerm.trim() === "" || 
-      product.barcode.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      product.vendor.toLowerCase().includes(searchTerm.toLowerCase());
+    // const matchesSearch = searchTerm.trim() === "" || 
+    //   product.barcode.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    //   product.vendor.toLowerCase().includes(searchTerm.toLowerCase());
+    let matchesSearch = true;
+    if (searchTerm.trim() !== "") {
+      const results = fuse.search(searchTerm);
+      matchesSearch = results.some(r => r.item.id === product.id);
+    }
     
     // 2. Category Filter Logic
     const matchesCategory = filterCategory === "all" || product.category === filterCategory;
@@ -405,6 +419,19 @@ const handlePrintLabels = () => {
             </select>
           </div> */}
          <div className="flex flex-wrap gap-4 p-4 bg-slate-50 border rounded-lg mb-4 items-end">
+          {/* NEW: Fuzzy Item Code Search */}
+          <div className="flex flex-col gap-1 flex-1 min-w-[200px]">
+            <label className="text-[10px] font-bold text-slate-500 uppercase">Search Item Code</label>
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-gray-400" />
+              <Input
+                placeholder="Search item code..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="h-8 pl-8 text-xs bg-white"
+              />
+            </div>
+          </div>
           {/* 1. Category Filter (Restored) */}
           <div className="flex flex-col gap-1">
             <label className="text-[10px] font-bold text-slate-500 uppercase">Category</label>
