@@ -119,10 +119,7 @@ React.useEffect(() => {
 }, [products]);
 
   const filteredProducts = products.filter((product) => {
-    // 1. Search Term Logic (Barcode or Vendor)
-    // const matchesSearch = searchTerm.trim() === "" || 
-    //   product.barcode.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    //   product.vendor.toLowerCase().includes(searchTerm.toLowerCase());
+
     let matchesSearch = true;
     if (searchTerm.trim() !== "") {
       const results = fuse.search(searchTerm);
@@ -159,28 +156,6 @@ React.useEffect(() => {
     return matchesSearch && matchesCategory && matchesVendor && matchesDisplay && matchesGodown;
   });
 
-
-//   const filteredProducts = products.filter((product) => {
-//   const matchesSearch = product.vendor.toLowerCase().includes(advancedFilters.searchTerm.toLowerCase()) ||
-//                         product.barcode.toLowerCase().includes(advancedFilters.searchTerm.toLowerCase());
-  
-//   const matchesCategory = advancedFilters.category === "all" || product.category === advancedFilters.category;
-  
-//   const matchesVendor = advancedFilters.vendor === "all" || product.vendor === advancedFilters.vendor;
-
-//   const matchesDisplay = 
-//     advancedFilters.displayStockStatus === "all" ? true :
-//     advancedFilters.displayStockStatus === "empty" ? product.displayStock === 0 :
-//     product.displayStock > 0;
-
-//   const matchesGodown = 
-//     advancedFilters.godownStockStatus === "all" ? true :
-//     advancedFilters.godownStockStatus === "empty" ? product.godownStock === 0 :
-//     product.godownStock > 0;
-
-//   return matchesSearch && matchesCategory && matchesVendor && matchesDisplay && matchesGodown;
-// });
-
   // Add this state to track which product is being edited
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBuffer, setEditBuffer] = useState<any>(null);
@@ -202,17 +177,8 @@ React.useEffect(() => {
     return Math.ceil(diff / (1000 * 60 * 60 * 24));
   };
 
-  // const filteredProducts = products.filter((product) => {
-  //   const matchesSearch =
-  //     product.vendor.toLowerCase().includes(searchTerm.toLowerCase()) ||
-  //     product.barcode.toLowerCase().includes(searchTerm.toLowerCase());
-  //   const matchesCategory = filterCategory === "all" || product.category === filterCategory;
-  //   const matchesDisplayFilter = showOnlyNonDisplayed ? product.displayStock === 0 : true;
-  //   return matchesSearch && matchesCategory && matchesDisplayFilter;
-  // });
-
   // 1. Updated Financial Logic (CP + OH)
-  const totalValue = products.reduce((sum, p) => sum + ((p.costPrice + p.overheadPrice) * p.stock), 0);
+  const totalValue = products.reduce((sum, p) => sum + (p.overheadPrice * p.stock), 0);
 
   // 2. Dead Stock Logic (>60 Days)
   const deadStockCount = products.filter(p => calculateAging(p.createdAt) > 60).length;
@@ -415,28 +381,6 @@ const handlePrintLabels = () => {
               </Button>
             </div>
           </div>
-
-          {/* RESTORED SEARCH & FILTER BAR */}
-          {/* <div className="flex gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-gray-400" />
-              <Input
-                placeholder="Search vendor or barcode..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10"
-              />
-            </div>
-            <select
-              value={filterCategory}
-              onChange={(e) => setFilterCategory(e.target.value)}
-              className="px-4 py-2 border rounded-md text-sm bg-white"
-            >
-              {categories.map((cat) => (
-                <option key={cat} value={cat}>{cat === "all" ? "All Categories" : cat}</option>
-              ))}
-            </select>
-          </div> */}
          <div className="flex flex-wrap gap-4 p-4 bg-slate-50 border rounded-lg mb-4 items-end">
           {/* NEW: Fuzzy Item Code Search */}
           <div className="flex flex-col gap-1 flex-1 min-w-[200px]">
@@ -566,6 +510,7 @@ const handlePrintLabels = () => {
                 <TableHead>Vendor</TableHead>
                 {/* NEW COLUMNS */}
                 <TableHead className="text-right">Cost Price</TableHead>
+                <TableHead className="text-right">Landing Price</TableHead>
                 <TableHead className="text-right">Selling Price</TableHead>
                 <TableHead>Stock (D/G)</TableHead>
                 <TableHead>Aging</TableHead>
@@ -673,6 +618,22 @@ const handlePrintLabels = () => {
                           </div>
                         ) : (
                           <span className="text-xs font-mono text-gray-500">₹{product.cost_price?.toLocaleString() || "-"}</span>
+                        )}
+                      </TableCell>
+
+                      <TableCell className="text-right">
+                        {isEditing ? (
+                          <div className="flex items-center justify-end gap-1">
+                            <span className="text-gray-400 text-[10px]">₹</span>
+                            <Input 
+                              type="number" 
+                              className="h-7 w-20 text-xs text-right font-mono" 
+                              value={data.overhead_expense} 
+                              onChange={(e) => setEditBuffer({ ...data, overhead_expense: Number(e.target.value) })} 
+                            />
+                          </div>
+                        ) : (
+                          <span className="text-xs font-mono text-gray-500">₹{product.overhead_expense?.toLocaleString() || "-"}</span>
                         )}
                       </TableCell>
 

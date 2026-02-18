@@ -39,6 +39,7 @@ export interface Product {
   remark?: string;
   createdAt?: string;
   cost_price?: number;  
+  overhead_expense?: number;  
   selling_price?: number;
 }
 
