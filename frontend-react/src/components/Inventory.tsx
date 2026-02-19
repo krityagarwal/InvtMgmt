@@ -612,10 +612,16 @@ const handlePrintLabels = () => {
                             <Input 
                               type="number" 
                               className="h-7 w-20 text-xs text-right font-mono" 
-                              value={data.cost_price} 
+                              value={data.cost_price === 0 ? "" : data.cost_price} 
                               //onChange={(e) => setEditBuffer({ ...data, cost_price: Number(e.target.value) })} 
                             onChange={(e) => {
-                              const baseCost = Number(e.target.value);
+                              const val = e.target.value;
+                              if (val === "") {
+                                // Allow empty input while typing
+                                setEditBuffer({ ...data, cost_price: 0, overhead_expense: 0, selling_price: 0 });
+                                return;
+                              }
+                              const baseCost = Number(val);
                               const landingPrice = baseCost * 1.05; // Auto-calculate 5% overhead
                               const sellingPrice = landingPrice * 2.5; // Auto-calculate 2.5x margin
                               
@@ -640,10 +646,21 @@ const handlePrintLabels = () => {
                             <Input 
                               type="number" 
                               className="h-7 w-20 text-xs text-right font-mono" 
-                              value={data.overhead_expense} 
+                              value={data.overhead_expense === 0 ? "" : data.overhead_expense}
                               //onChange={(e) => setEditBuffer({ ...data, overhead_expense: Number(e.target.value) })} 
                             onChange={(e) => {
-                              const manualLanding = Number(e.target.value);
+                              const val = e.target.value;
+                            
+                              // 2. If user clears the field, set values to 0 but display as empty
+                              if (val === "") {
+                                setEditBuffer({ 
+                                  ...data, 
+                                  overhead_expense: 0, 
+                                  selling_price: 0 
+                                });
+                                return;
+                              }
+                              const manualLanding = Number(val);
                               setEditBuffer({ 
                                 ...data, 
                                 overhead_expense: manualLanding,
