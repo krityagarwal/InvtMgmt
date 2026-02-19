@@ -613,8 +613,20 @@ const handlePrintLabels = () => {
                               type="number" 
                               className="h-7 w-20 text-xs text-right font-mono" 
                               value={data.cost_price} 
-                              onChange={(e) => setEditBuffer({ ...data, cost_price: Number(e.target.value) })} 
-                            />
+                              //onChange={(e) => setEditBuffer({ ...data, cost_price: Number(e.target.value) })} 
+                            onChange={(e) => {
+                              const baseCost = Number(e.target.value);
+                              const landingPrice = baseCost * 1.05; // Auto-calculate 5% overhead
+                              const sellingPrice = landingPrice * 2.5; // Auto-calculate 2.5x margin
+                              
+                              setEditBuffer({ 
+                                ...data, 
+                                cost_price: baseCost,
+                                overhead_expense: Math.round(landingPrice * 100) / 100, // Round to 2 decimals
+                                selling_price: Math.round(sellingPrice) // Round to nearest whole number
+                              });
+                            }}
+                          />
                           </div>
                         ) : (
                           <span className="text-xs font-mono text-gray-500">₹{product.cost_price?.toLocaleString() || "-"}</span>
@@ -629,8 +641,16 @@ const handlePrintLabels = () => {
                               type="number" 
                               className="h-7 w-20 text-xs text-right font-mono" 
                               value={data.overhead_expense} 
-                              onChange={(e) => setEditBuffer({ ...data, overhead_expense: Number(e.target.value) })} 
-                            />
+                              //onChange={(e) => setEditBuffer({ ...data, overhead_expense: Number(e.target.value) })} 
+                            onChange={(e) => {
+                              const manualLanding = Number(e.target.value);
+                              setEditBuffer({ 
+                                ...data, 
+                                overhead_expense: manualLanding,
+                                selling_price: Math.round(manualLanding * 2.5) // Selling price still follows the rule
+                              });
+                            }} 
+                          />
                           </div>
                         ) : (
                           <span className="text-xs font-mono text-gray-500">₹{product.overhead_expense?.toLocaleString() || "-"}</span>
@@ -645,7 +665,9 @@ const handlePrintLabels = () => {
                               type="number" 
                               className="h-7 w-20 text-xs text-right font-mono font-bold" 
                               value={data.selling_price} 
-                              onChange={(e) => setEditBuffer({ ...data, selling_price: Number(e.target.value) })} 
+                              //onChange={(e) => setEditBuffer({ ...data, selling_price: Number(e.target.value) })} 
+                              readOnly // Implementation of "not allowed" requirement
+                              tabIndex={-1}
                             />
                           </div>
                         ) : (
