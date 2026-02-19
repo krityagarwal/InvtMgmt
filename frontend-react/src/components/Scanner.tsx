@@ -182,7 +182,7 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
 
   const handleManualSearch = (code: string) => {
     if (code.trim()) {
-      const targetCode = code.trim().toUpperCase();;
+      const targetCode = code.trim();
       setScanValue(""); 
       onProductSearch(targetCode);
       // Reset room to None for new search
