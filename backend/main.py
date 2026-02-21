@@ -478,6 +478,10 @@ async def finalize_order(req: FinalizeOrderRequest): # Now accepts the full obje
                 req.client_phone, 
                 req.order_id
             ))
+
+            # Keep SELL totals aligned with PI flow by recalculating persisted amounts
+            # (subtotal, discount_amount, tax_amount, final_total) after % updates.
+            update_order_total(cur, req.order_id)
             
             conn.commit()
             
@@ -666,76 +670,6 @@ async def remove_order_item(order_id: str, product_id: str):
                 return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) 
-
-@app.post("/order/finalize-sale")
-async def create_sale(order_id: str, discount: float = 0.0, tax: float = 0.0, paid_amount: float = 0.0): # Default to 0.0 to allow flexibility
-    try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
-                # 1. Fetch items with their current stock levels for validation
-                cur.execute("""
-                    SELECT oi.product_id, oi.quantity, oi.unit_price, p.qty_display, p.qty_godown 
-                    FROM order_items oi
-                    JOIN products p ON oi.product_id = p.id
-                    WHERE oi.order_id = %s
-                """, (order_id,))
-                items = cur.fetchall()
-                
-                if not items:
-                    raise HTTPException(status_code=400, detail="Cart is empty")
-
-                # 2. Math Logic
-                subtotal = sum(float(item['unit_price']) * item['quantity'] for item in items)
-                discount_amount = subtotal * (discount / 100.0) 
-                taxable_amount = subtotal - discount_amount
-                # Logic works perfectly even if tax is 0.0
-                tax_amount = taxable_amount * (tax / 100.0)
-                final_total = taxable_amount + tax_amount
-
-                # 3. Stock Deduction Logic (CRITICAL FIX)
-                for item in items:
-                    qty_to_deduct = item['quantity']
-                    
-                    # Logic: Try to deduct from display first, then from godown
-                    if item['qty_display'] >= qty_to_deduct:
-                        cur.execute("UPDATE products SET qty_display = qty_display - %s WHERE id = %s", 
-                                   (qty_to_deduct, item['product_id']))
-                    else:
-                        # If display isn't enough, empty display and take remainder from godown
-                        remainder = qty_to_deduct - item['qty_display']
-                        cur.execute("""
-                            UPDATE products 
-                            SET qty_display = 0, 
-                                qty_godown = qty_godown - %s 
-                            WHERE id = %s
-                        """, (remainder, item['product_id']))
-
-                # 4. Finalize the Order status
-                cur.execute("""
-                    UPDATE orders 
-                    SET discount_percent = %s, 
-                        tax_percent = %s,
-                        subtotal = %s, 
-                        discount_amount = %s, 
-                        tax_amount = %s, 
-                        final_total = %s, 
-                        paid_amount = %s,
-                        status = 'sold'
-                    WHERE id = %s
-                """, (discount, tax, subtotal, discount_amount, tax_amount, final_total, paid_amount,order_id))
-
-                conn.commit()
-                return {
-                    "status": "success", 
-                    "final_total": final_total, 
-                    "paid_amount": paid_amount,
-                    "balance_due": final_total - paid_amount
-                }
-    except Exception as e:
-        # It's better to log the actual error for debugging
-        print(f"Checkout Error: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error during stock deduction")
-
 
 def update_order_total(cur, order_id):
     """Recalculates and persists the subtotal, discount, tax, and final total."""
