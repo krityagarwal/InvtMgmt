@@ -531,6 +531,7 @@ export function Cart({
               value={discount || ""} 
               placeholder="0"
               onChange={(e) => onUpdateDiscount(parseFloat(e.target.value) || 0)}
+              onFocus={(e) => e.currentTarget.select()}
               className="w-12 h-6 text-[11px] text-center font-bold border border-slate-200 rounded bg-white outline-none focus:border-blue-400 transition-colors"
             />
             <span className="text-[11px] font-bold text-slate-400">%</span>
@@ -545,6 +546,7 @@ export function Cart({
               type="number" 
               value={activeCart?.tax ?? 18}
               onChange={(e) => updateCartTax(activeCartId, Number(e.target.value))}
+              onFocus={(e) => e.currentTarget.select()}
               className="w-12 h-6 text-[11px] text-center font-bold border border-slate-200 rounded bg-white outline-none focus:border-blue-400 transition-colors"
             />
             <span className="text-[11px] font-bold text-slate-400">%</span>

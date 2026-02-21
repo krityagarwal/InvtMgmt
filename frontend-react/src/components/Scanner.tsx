@@ -147,7 +147,7 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
   const [scanValue, setScanValue] = useState("");
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [quantity, setQuantity] = useState(1);
-  const [selectedAttribute, setSelectedAttribute] = useState("None");
+  const [selectedAttribute, setSelectedAttribute] = useState<string>("None");
   const [customAttribute, setCustomAttribute] = useState("");
 
   // DEBUG LOG: Track every render of the quantity
@@ -355,7 +355,8 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
 
               {/* Add to Cart */}
               <Button
-                onClick={() => onAddToCart(searchResult, quantity, selectedAttribute)}
+                disabled={!searchResult}
+                onClick={() => searchResult && onAddToCart(searchResult, quantity, selectedAttribute)}
                 className="
                   bg-blue-600 hover:bg-blue-700
                   w-full sm:w-auto sm:min-w-[180px]

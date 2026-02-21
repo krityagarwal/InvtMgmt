@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react";
-import { Package, Search, AlertTriangle, Printer, EyeOff, LayoutDashboard, Edit2, Plus, Trash2 } from "lucide-react";
+import { Package, Search, AlertTriangle, Printer, LayoutDashboard, Edit2, Plus, Trash2, ArrowUpDown } from "lucide-react";
 import { Input } from "./ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -46,8 +46,11 @@ interface CategoryOption {
 export function Inventory({ products, onUpdateInventory, onBulkAdd}: InventoryProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterCategory, setFilterCategory] = useState<string>("all");
-  const [showOnlyNonDisplayed, setShowOnlyNonDisplayed] = useState(false);
   const [printSelection, setPrintSelection] = useState<{ [key: string]: number }>({});
+  const [priceSort, setPriceSort] = useState<{
+    field: "cost_price" | "overhead_expense" | "selling_price" | null;
+    direction: "asc" | "desc";
+  }>({ field: null, direction: "asc" });
   const [categoryOptions, setCategoryOptions] = useState<CategoryOption[]>([]);
   const categories = React.useMemo(
   () => ["all", ...new Set(products.map(p => p.category))],
@@ -156,6 +159,29 @@ React.useEffect(() => {
     return matchesSearch && matchesCategory && matchesVendor && matchesDisplay && matchesGodown;
   });
 
+  const sortedProducts = React.useMemo(() => {
+    const sortField = priceSort.field;
+    if (!sortField) return filteredProducts;
+
+    const sorted = [...filteredProducts].sort((a, b) => {
+      const left = Number((a as any)[sortField] ?? 0);
+      const right = Number((b as any)[sortField] ?? 0);
+      return priceSort.direction === "asc" ? left - right : right - left;
+    });
+
+    return sorted;
+  }, [filteredProducts, priceSort]);
+
+  const handlePriceSort = (field: "cost_price" | "overhead_expense" | "selling_price") => {
+    setPriceSort((prev) => {
+      if (prev.field === field) {
+        return { field, direction: prev.direction === "asc" ? "desc" : "asc" };
+      }
+      return { field, direction: "asc" };
+    });
+  };
+  const isFilteredView = filteredProducts.length !== products.length;
+
   // Add this state to track which product is being edited
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBuffer, setEditBuffer] = useState<any>(null);
@@ -201,14 +227,14 @@ React.useEffect(() => {
 
 const toggleAll = () => {
   // 1. Check if all currently filtered products are already selected
-  const allFilteredSelected = filteredProducts.length > 0 && 
-    filteredProducts.every(p => !!printSelection[p.id]);
+  const allFilteredSelected = sortedProducts.length > 0 && 
+    sortedProducts.every(p => !!printSelection[p.id]);
 
   if (allFilteredSelected) {
     // 2. If all are selected, clear the selection for THESE items
     setPrintSelection(prev => {
       const newSelection = { ...prev };
-      filteredProducts.forEach(p => {
+      sortedProducts.forEach(p => {
         delete newSelection[p.id];
       });
       return newSelection;
@@ -217,7 +243,7 @@ const toggleAll = () => {
     // 3. Otherwise, add all filtered products to the selection
     setPrintSelection(prev => {
       const newSelection = { ...prev };
-      filteredProducts.forEach(p => {
+      sortedProducts.forEach(p => {
         newSelection[p.id] = 1; // Default quantity to 1
       });
       return newSelection;
@@ -324,45 +350,37 @@ const handlePrintLabels = () => {
 
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Optimized Retail Dashboard Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card>
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-gray-500">Total Investment</CardTitle>
+        <Card className="border-slate-200 shadow-sm">
+          <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Investment</CardTitle>
             <span className="text-gray-400 font-bold">₹</span>
           </CardHeader>
-          <CardContent><div className="text-2xl font-bold">₹{totalValue.toLocaleString()}</div></CardContent>
+          <CardContent className="pt-0 pb-4"><div className="text-2xl font-bold text-slate-900">₹{totalValue.toLocaleString()}</div></CardContent>
         </Card>
-        <Card>
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-gray-500">{"Dead Stock (>60d)"}</CardTitle>
+        <Card className="border-slate-200 shadow-sm">
+          <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-xs font-semibold uppercase tracking-wide text-slate-500">{"Dead Stock (>60d)"}</CardTitle>
             <AlertTriangle className="size-4 text-red-500" />
           </CardHeader>
-          <CardContent><div className="text-2xl font-bold">{deadStockCount} <small className="text-xs font-normal text-gray-400">Items</small></div></CardContent>
+          <CardContent className="pt-0 pb-4"><div className="text-2xl font-bold text-slate-900">{deadStockCount} <small className="text-xs font-normal text-gray-400">Items</small></div></CardContent>
         </Card>
-        <Card>
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-gray-500">Godown Ratio</CardTitle>
+        <Card className="border-slate-200 shadow-sm">
+          <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-xs font-semibold uppercase tracking-wide text-slate-500">Godown Ratio</CardTitle>
             <Package className="size-4 text-blue-500" />
           </CardHeader>
-          <CardContent><div className="text-2xl font-bold">{godownRatio}% <small className="text-xs font-normal text-gray-400">of Stock</small></div></CardContent>
+          <CardContent className="pt-0 pb-4"><div className="text-2xl font-bold text-slate-900">{godownRatio}% <small className="text-xs font-normal text-gray-400">of Stock</small></div></CardContent>
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between mb-4">
-            <CardTitle>Inventory Management</CardTitle>
+      <Card className="border-slate-200 shadow-sm overflow-hidden">
+        <CardHeader className="space-y-3 pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xl font-bold tracking-tight">Inventory</CardTitle>
             <div className="flex gap-2">
-              <Button 
-                variant={showOnlyNonDisplayed ? "destructive" : "outline"}
-                size="sm"
-                onClick={() => setShowOnlyNonDisplayed(!showOnlyNonDisplayed)}
-              >
-                <EyeOff className="mr-2 size-4" />
-                {showOnlyNonDisplayed ? "Showing Non-Displayed" : "Filter Non-Displayed"}
-              </Button>
               <Button 
                 disabled={Object.keys(printSelection).length === 0} 
                 className="bg-blue-600 hover:bg-blue-700"
@@ -381,9 +399,9 @@ const handlePrintLabels = () => {
               </Button>
             </div>
           </div>
-         <div className="flex flex-wrap gap-4 p-4 bg-slate-50 border rounded-lg mb-4 items-end">
+         <div className="flex flex-wrap gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg items-end">
           {/* NEW: Fuzzy Item Code Search */}
-          <div className="flex flex-col gap-1 flex-1 min-w-[200px]">
+          <div className="flex flex-col gap-1 flex-1 min-w-[240px]">
             <label className="text-[10px] font-bold text-slate-500 uppercase">Search Item Code</label>
             <div className="relative">
               <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-gray-400" />
@@ -492,309 +510,356 @@ const handlePrintLabels = () => {
         </div>
         </CardHeader>
 
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {/* <TableHead className="w-[40px]"><Checkbox /></TableHead> */}
-                <TableHead className="w-[40px]">
-                  <Checkbox 
-                    // Show as checked only if all visible items are selected
-                    checked={filteredProducts.length > 0 && filteredProducts.every(p => !!printSelection[p.id])}
-                    onCheckedChange={toggleAll}
-                  />
-                </TableHead>
-                <TableHead className="w-[60px]">Image</TableHead>
-                <TableHead className="w-[80px]">QR</TableHead>
-                <TableHead>Item Details</TableHead>
-                <TableHead>Vendor</TableHead>
-                {/* NEW COLUMNS */}
-                <TableHead className="text-right">Cost Price</TableHead>
-                <TableHead className="text-right">Landing Price</TableHead>
-                <TableHead className="text-right">Selling Price</TableHead>
-                <TableHead>Stock (D/G)</TableHead>
-                <TableHead>Aging</TableHead>
-                <TableHead>Remark</TableHead>
-              </TableRow>
-            </TableHeader>
-             <TableBody>
-                {filteredProducts.map((product) => {
-                  const isEditing = editingId === product.id;
-                  // Use buffer values if editing, otherwise use original product data
-                  const data = isEditing ? editBuffer : product;
-
-                  return (
-                    <TableRow 
-                      key={product.id} 
-                      className={`${printSelection[product.id] ? "bg-blue-50" : ""} ${isEditing ? "bg-blue-50/30 ring-1 ring-inset ring-blue-200" : ""}`}
+        <CardContent className="p-0">
+            <div className="px-6 pt-0 pb-3 text-xs text-slate-500">
+              Showing {isFilteredView ? filteredProducts.length : products.length} of {products.length} items
+            </div>
+            <div className="overflow-x-auto">
+            <Table className="min-w-[1220px]">
+              <TableHeader>
+                <TableRow>
+                  {/* <TableHead className="w-[40px]"><Checkbox /></TableHead> */}
+                  <TableHead className="w-[40px]">
+                    <Checkbox 
+                      // Show as checked only if all visible items are selected
+                      checked={sortedProducts.length > 0 && sortedProducts.every(p => !!printSelection[p.id])}
+                      onCheckedChange={toggleAll}
+                    />
+                  </TableHead>
+                  <TableHead className="w-[60px]">Image</TableHead>
+                  <TableHead className="w-[190px]">Item Details</TableHead>
+                  <TableHead className="w-[190px]">Vendor</TableHead>
+                  {/* NEW COLUMNS */}
+                  <TableHead className="w-[120px] text-left">
+                    <button
+                      type="button"
+                      onClick={() => handlePriceSort("cost_price")}
+                      className="inline-flex items-center gap-1 text-left hover:text-slate-900"
                     >
-                      <TableCell>
-                        <Checkbox checked={!!printSelection[product.id]} onCheckedChange={() => toggleSelection(product.id)}/>
-                      </TableCell>
-                      
-                      {/* IMAGE: With edit overlay if active */}
-                      <TableCell>
-                        <div className="relative size-10 border rounded overflow-hidden group">
-                          {data.photo_url ? (
-                            <img src={data.photo_url} alt={data.barcode} className="size-full object-contain" />
-                          ) : (
-                            <div className="size-full flex items-center justify-center bg-gray-50 text-[10px] text-gray-400">No Img</div>
-                          )}
-                          {isEditing && (
-                            <label className="absolute inset-0 bg-black/40 flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity">
-                              <input 
-                                type="file" 
-                                className="hidden" 
-                                onChange={(e) => {
-                                  const file = e.target.files?.[0];
-                                  if (file) {
-                                    // Logic for image preview/upload goes here
-                                    const reader = new FileReader();
-                                    reader.onloadend = () => setEditBuffer({ ...editBuffer, photo_url: reader.result });
-                                    reader.readAsDataURL(file);
-                                  }
-                                }} 
-                              />
-                              <span className="text-[8px] text-white font-bold">CHANGE</span>
-                            </label>
-                          )}
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        <div className="size-10 flex items-center justify-center border rounded bg-white p-1">
-                          <QRCode value={product.barcode} size={32} />
-                        </div>
-                      </TableCell>
-
-                      {/* ITEM DETAILS: Inline Inputs */}
-                      <TableCell>
-                        <div className="flex flex-col gap-1">
-                          {isEditing ? (
-                            <>
-                              <Input 
-                                className="h-7 text-xs font-mono font-bold" 
-                                value={data.barcode} 
-                                onChange={(e) => setEditBuffer({ ...data, barcode: e.target.value })} 
-                              />
-                              <Input 
-                                className="h-6 text-[10px] uppercase" 
-                                value={data.category} 
-                                onChange={(e) => setEditBuffer({ ...data, category: e.target.value })} 
-                              />
-                            </>
-                          ) : (
-                            <>
-                              <span className="font-mono text-xs font-bold">{product.barcode}</span>
-                              <span className="text-[10px] text-gray-400 uppercase">{product.category}</span>
-                            </>
-                          )}
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        {isEditing ? (
-                          <Input 
-                            className="h-7 text-xs" 
-                            value={data.vendor} 
-                            onChange={(e) => setEditBuffer({ ...data, vendor: e.target.value })} 
-                          />
-                        ) : (
-                          <span className="text-sm font-medium">{product.vendor}</span>
-                        )}
-                      </TableCell>
-
-                      {/* PRICE FIELDS */}
-                      <TableCell className="text-right">
-                        {isEditing ? (
-                          <div className="flex items-center justify-end gap-1">
-                            <span className="text-gray-400 text-[10px]">₹</span>
-                            <Input 
-                              type="number" 
-                              className="h-7 w-20 text-xs text-right font-mono" 
-                              value={data.cost_price === 0 ? "" : data.cost_price} 
-                              //onChange={(e) => setEditBuffer({ ...data, cost_price: Number(e.target.value) })} 
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val === "") {
-                                // Allow empty input while typing
-                                setEditBuffer({ ...data, cost_price: 0, overhead_expense: 0, selling_price: 0 });
-                                return;
-                              }
-                              const baseCost = Number(val);
-                              const landingPrice = baseCost * 1.05; // Auto-calculate 5% overhead
-                              const sellingPrice = landingPrice * 2.5; // Auto-calculate 2.5x margin
-                              
-                              setEditBuffer({ 
-                                ...data, 
-                                cost_price: baseCost,
-                                overhead_expense: Math.round(landingPrice * 100) / 100, // Round to 2 decimals
-                                selling_price: Math.round(sellingPrice) // Round to nearest whole number
-                              });
-                            }}
-                          />
-                          </div>
-                        ) : (
-                          <span className="text-xs font-mono text-gray-500">₹{product.cost_price?.toLocaleString() || "-"}</span>
-                        )}
-                      </TableCell>
-
-                      <TableCell className="text-right">
-                        {isEditing ? (
-                          <div className="flex items-center justify-end gap-1">
-                            <span className="text-gray-400 text-[10px]">₹</span>
-                            <Input 
-                              type="number" 
-                              className="h-7 w-20 text-xs text-right font-mono" 
-                              value={data.overhead_expense === 0 ? "" : data.overhead_expense}
-                              //onChange={(e) => setEditBuffer({ ...data, overhead_expense: Number(e.target.value) })} 
-                            onChange={(e) => {
-                              const val = e.target.value;
-                            
-                              // 2. If user clears the field, set values to 0 but display as empty
-                              if (val === "") {
-                                setEditBuffer({ 
-                                  ...data, 
-                                  overhead_expense: 0, 
-                                  selling_price: 0 
-                                });
-                                return;
-                              }
-                              const manualLanding = Number(val);
-                              setEditBuffer({ 
-                                ...data, 
-                                overhead_expense: manualLanding,
-                                selling_price: Math.round(manualLanding * 2.5) // Selling price still follows the rule
-                              });
-                            }} 
-                          />
-                          </div>
-                        ) : (
-                          <span className="text-xs font-mono text-gray-500">₹{product.overhead_expense?.toLocaleString() || "-"}</span>
-                        )}
-                      </TableCell>
-
-                      <TableCell className="text-right">
-                        {isEditing ? (
-                          <div className="flex items-center justify-end gap-1">
-                            <span className="text-blue-400 text-[10px]">₹</span>
-                            <Input 
-                              type="number" 
-                              className="h-7 w-20 text-xs text-right font-mono font-bold" 
-                              value={data.selling_price} 
-                              //onChange={(e) => setEditBuffer({ ...data, selling_price: Number(e.target.value) })} 
-                              readOnly // Implementation of "not allowed" requirement
-                              tabIndex={-1}
-                            />
-                          </div>
-                        ) : (
-                          <span className="text-xs font-mono font-bold text-blue-600">₹{product.selling_price?.toLocaleString() || "-"}</span>
-                        )}
-                      </TableCell>
-
-                      {/* STOCK */}
-                      <TableCell>
-                        <div className="flex gap-1">
-                          {isEditing ? (
-                            <>
-                              <Input 
-                                type="number" 
-                                className="h-7 w-12 text-xs p-1" 
-                                value={data.displayStock} 
-                                onChange={(e) => setEditBuffer({ ...data, displayStock: Number(e.target.value) })} 
-                              />
-                              <Input 
-                                type="number" 
-                                className="h-7 w-12 text-xs p-1" 
-                                value={data.godownStock} 
-                                onChange={(e) => setEditBuffer({ ...data, godownStock: Number(e.target.value) })} 
-                              />
-                            </>
-                          ) : (
-                            <>
-                              <Badge className={product.displayStock === 0 ? "bg-red-50 text-red-600 border-red-100" : "bg-green-50 text-green-700 border-green-100"}>
-                                {product.displayStock}
-                              </Badge>
-                              <Badge variant="outline" className="text-gray-400">{product.godownStock}</Badge>
-                            </>
-                          )}
-                        </div>
-                      </TableCell>
-
-                      <TableCell className="text-xs">
-                        <span className={calculateAging(product.createdAt) > 60 ? "text-red-500 font-bold" : "text-gray-500"}>
-                          {calculateAging(product.createdAt)}d
-                        </span>
-                      </TableCell>
-
-                      <TableCell className="max-w-[120px]">
-                        {isEditing ? (
-                          <Input 
-                            className="h-7 text-[11px] italic" 
-                            value={data.remark || ""} 
-                            onChange={(e) => setEditBuffer({ ...data, remark: e.target.value })} 
-                          />
-                        ) : (
-                          <p className="truncate text-[11px] text-gray-400 italic" title={product.remark}>
-                            {product.remark || "-"}
-                          </p>
-                        )}
-                      </TableCell>
-
-                      {/* ROW ACTIONS */}
-                      <TableCell className="text-right">
-                        {isEditing ? (
-                          <div className="flex items-center justify-end gap-1">
-                            <Button 
-                              size="sm" 
-                              variant="ghost" 
-                              className="h-7 px-2 text-[10px] font-bold text-blue-600 hover:bg-blue-50"
-                              onClick={async () => {
-                                try {
-                                  // 1. Send data to your API
-                                  await onUpdateInventory(data); 
-                                  
-                                  // 2. Clear edit states to "get out of edit mode"
-                                  setEditingId(null);
-                                  setEditBuffer(null);
-                                  
-                                  // The parent state update in onUpdateInventory will refresh the data automatically
-                                } catch (error) {
-                                  console.error("Save failed:", error);
-                                  // We keep editingId active here so the user doesn't lose their typed changes
-                                }
-                              }}
-                            >
-                              SAVE
-                            </Button>
-                            <Button 
-                              size="sm" 
-                              variant="ghost" 
-                              className="h-7 px-2 text-[10px] text-gray-400 hover:bg-gray-50"
-                              onClick={() => setEditingId(null)}
-                            >
-                              CANCEL
-                            </Button>
-                          </div>
-                        ) : (
-                          <Button 
-                            size="icon" 
-                            variant="ghost" 
-                            className="size-8"
+                      Cost Price
+                      <ArrowUpDown className="size-3 text-slate-400" />
+                    </button>
+                  </TableHead>
+                  <TableHead className="w-[120px] text-left">
+                    <button
+                      type="button"
+                      onClick={() => handlePriceSort("overhead_expense")}
+                      className="inline-flex items-center gap-1 text-left hover:text-slate-900"
+                    >
+                      Landing Price
+                      <ArrowUpDown className="size-3 text-slate-400" />
+                    </button>
+                  </TableHead>
+                  <TableHead className="w-[120px] text-left">
+                    <button
+                      type="button"
+                      onClick={() => handlePriceSort("selling_price")}
+                      className="inline-flex items-center gap-1 text-left hover:text-slate-900"
+                    >
+                      Selling Price
+                      <ArrowUpDown className="size-3 text-slate-400" />
+                    </button>
+                  </TableHead>
+                  <TableHead className="w-[120px]">Stock (D/G)</TableHead>
+                  <TableHead className="w-[80px]">Aging</TableHead>
+                  <TableHead className="w-[160px]">Remark</TableHead>
+                  <TableHead className="w-[90px] text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+               <TableBody>
+                  {sortedProducts.map((product) => {
+                    const isEditing = editingId === product.id;
+                    // Use buffer values if editing, otherwise use original product data
+                    const data = isEditing ? editBuffer : product;
+                    return (
+                      <TableRow 
+                        key={product.id} 
+                        className={`${printSelection[product.id] ? "bg-blue-50" : ""} ${isEditing ? "bg-blue-50/30 ring-1 ring-inset ring-blue-200" : ""}`}
+                      >
+                        <TableCell>
+                          <Checkbox checked={!!printSelection[product.id]} onCheckedChange={() => toggleSelection(product.id)}/>
+                        </TableCell>
+                        
+                        {/* IMAGE: With edit overlay if active */}
+                        <TableCell>
+                          <div
+                            className={`relative size-10 border rounded overflow-hidden group ${data.photo_url ? "cursor-zoom-in" : ""}`}
                             onClick={() => {
-                              setEditingId(product.id);
-                              setEditBuffer({ ...product });
+                              if (!isEditing && data.photo_url) {
+                                setSelectedImage(data.photo_url);
+                              }
                             }}
                           >
-                            <Edit2 className="size-3.5 text-slate-400" />
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-          </Table>
+                            {data.photo_url ? (
+                              <img src={data.photo_url} alt={data.barcode} className="size-full object-contain" />
+                            ) : (
+                              <div className="size-full flex items-center justify-center bg-gray-50 text-[10px] text-gray-400">No Img</div>
+                            )}
+                            {isEditing && (
+                              <label className="absolute inset-0 bg-black/40 flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity">
+                                <input 
+                                  type="file" 
+                                  className="hidden" 
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) {
+                                      // Logic for image preview/upload goes here
+                                      const reader = new FileReader();
+                                      reader.onloadend = () => setEditBuffer({ ...editBuffer, photo_url: reader.result });
+                                      reader.readAsDataURL(file);
+                                    }
+                                  }} 
+                                />
+                                <span className="text-[8px] text-white font-bold">CHANGE</span>
+                              </label>
+                            )}
+                          </div>
+                        </TableCell>
+
+                        {/* ITEM DETAILS: Inline Inputs */}
+                        <TableCell className="w-[190px] pl-4">
+                          <div className="flex flex-col gap-1">
+                            {isEditing ? (
+                              <>
+                                <Input 
+                                  className="h-7 text-xs font-mono font-bold" 
+                                  value={data.barcode} 
+                                  onChange={(e) => setEditBuffer({ ...data, barcode: e.target.value })} 
+                                />
+                                <select
+                                  className="h-6 text-[10px] uppercase border rounded px-1 bg-white"
+                                  value={data.category || ""}
+                                  onChange={(e) => setEditBuffer({ ...data, category: e.target.value })}
+                                >
+                                  {categories
+                                    .filter((cat) => cat !== "all")
+                                    .map((cat) => (
+                                      <option key={cat} value={cat}>
+                                        {cat}
+                                      </option>
+                                    ))}
+                                </select>
+                              </>
+                            ) : (
+                              <>
+                                <span className="font-mono text-xs font-bold">{product.barcode}</span>
+                                <span className="text-[10px] text-gray-400 uppercase">{product.category}</span>
+                              </>
+                            )}
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="w-[190px]">
+                          {isEditing ? (
+                            <Input 
+                              className="h-7 text-xs" 
+                              value={data.vendor} 
+                              onChange={(e) => setEditBuffer({ ...data, vendor: e.target.value })} 
+                            />
+                          ) : (
+                            <span className="text-sm font-medium">{product.vendor}</span>
+                          )}
+                        </TableCell>
+
+                        {/* PRICE FIELDS */}
+                        <TableCell className="text-left">
+                          {isEditing ? (
+                            <div className="flex items-center justify-start gap-1">
+                              <span className="text-gray-400 text-[10px]">₹</span>
+                              <Input 
+                                type="number" 
+                                className="h-7 w-20 text-xs text-left pl-1 font-mono" 
+                                value={data.cost_price === 0 ? "" : data.cost_price} 
+                                //onChange={(e) => setEditBuffer({ ...data, cost_price: Number(e.target.value) })} 
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === "") {
+                                  // Allow empty input while typing
+                                  setEditBuffer({ ...data, cost_price: 0, overhead_expense: 0, selling_price: 0 });
+                                  return;
+                                }
+                                const baseCost = Number(val);
+                                const landingPrice = baseCost * 1.05; // Auto-calculate 5% overhead
+                                const sellingPrice = landingPrice * 2.5; // Auto-calculate 2.5x margin
+                                
+                                setEditBuffer({ 
+                                  ...data, 
+                                  cost_price: baseCost,
+                                  overhead_expense: Math.round(landingPrice * 100) / 100, // Round to 2 decimals
+                                  selling_price: Math.round(sellingPrice) // Round to nearest whole number
+                                });
+                              }}
+                            />
+                            </div>
+                          ) : (
+                            <span className="text-xs font-mono text-gray-600">₹{product.cost_price?.toLocaleString() || "-"}</span>
+                          )}
+                        </TableCell>
+
+                        <TableCell className="text-left">
+                          {isEditing ? (
+                            <div className="flex items-center justify-start gap-1">
+                              <span className="text-gray-400 text-[10px]">₹</span>
+                              <Input 
+                                type="number" 
+                                className="h-7 w-20 text-xs text-left pl-1 font-mono" 
+                                value={data.overhead_expense === 0 ? "" : data.overhead_expense}
+                                //onChange={(e) => setEditBuffer({ ...data, overhead_expense: Number(e.target.value) })} 
+                              onChange={(e) => {
+                                const val = e.target.value;
+                              
+                                // 2. If user clears the field, set values to 0 but display as empty
+                                if (val === "") {
+                                  setEditBuffer({ 
+                                    ...data, 
+                                    overhead_expense: 0, 
+                                    selling_price: 0 
+                                  });
+                                  return;
+                                }
+                                const manualLanding = Number(val);
+                                setEditBuffer({ 
+                                  ...data, 
+                                  overhead_expense: manualLanding,
+                                  selling_price: Math.round(manualLanding * 2.5) // Selling price still follows the rule
+                                });
+                              }} 
+                            />
+                            </div>
+                          ) : (
+                            <span className="text-xs font-mono text-gray-600">₹{product.overhead_expense?.toLocaleString() || "-"}</span>
+                          )}
+                        </TableCell>
+
+                        <TableCell className="text-left">
+                          {isEditing ? (
+                            <div className="flex items-center justify-start gap-1">
+                              <span className="text-gray-400 text-[10px]">₹</span>
+                              <Input 
+                                type="number" 
+                                className="h-7 w-20 text-xs text-left pl-1 font-mono" 
+                                value={data.selling_price} 
+                                //onChange={(e) => setEditBuffer({ ...data, selling_price: Number(e.target.value) })} 
+                                readOnly // Implementation of "not allowed" requirement
+                                tabIndex={-1}
+                              />
+                            </div>
+                          ) : (
+                            <span className="text-xs font-mono text-gray-600">₹{product.selling_price?.toLocaleString() || "-"}</span>
+                          )}
+                        </TableCell>
+
+                        {/* STOCK */}
+                        <TableCell>
+                          <div className="flex gap-1">
+                            {isEditing ? (
+                              <>
+                                <Input 
+                                  type="number" 
+                                  className="h-7 w-12 text-xs p-1" 
+                                  value={data.displayStock} 
+                                  onChange={(e) => setEditBuffer({ ...data, displayStock: Number(e.target.value) })} 
+                                />
+                                <Input 
+                                  type="number" 
+                                  className="h-7 w-12 text-xs p-1" 
+                                  value={data.godownStock} 
+                                  onChange={(e) => setEditBuffer({ ...data, godownStock: Number(e.target.value) })} 
+                                />
+                              </>
+                            ) : (
+                              <>
+                                <Badge className={product.displayStock === 0 ? "bg-red-50 text-red-600 border-red-100" : "bg-green-50 text-green-700 border-green-100"}>
+                                  {product.displayStock}
+                                </Badge>
+                                <Badge variant="outline" className="text-gray-400">{product.godownStock}</Badge>
+                              </>
+                            )}
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="text-xs">
+                          <span className={calculateAging(product.createdAt) > 60 ? "text-red-500 font-bold" : "text-gray-500"}>
+                            {calculateAging(product.createdAt)}d
+                          </span>
+                        </TableCell>
+
+                        <TableCell className="max-w-[120px]">
+                          {isEditing ? (
+                            <Input 
+                              className="h-7 text-[11px] italic" 
+                              value={data.remark || ""} 
+                              onChange={(e) => setEditBuffer({ ...data, remark: e.target.value })} 
+                            />
+                          ) : (
+                            <p className="truncate text-[11px] text-gray-400 italic" title={product.remark}>
+                              {product.remark || "-"}
+                            </p>
+                          )}
+                        </TableCell>
+
+                        {/* ROW ACTIONS */}
+                        <TableCell className="text-right">
+                          {isEditing ? (
+                            <div className="flex items-center justify-end gap-1">
+                              <Button 
+                                size="sm" 
+                                variant="ghost" 
+                                className="h-7 px-2 text-[10px] font-bold text-blue-600 hover:bg-blue-50"
+                                onClick={async () => {
+                                  try {
+                                    const matchedCategory = categoryOptions.find(
+                                      (c) => c.name === data.category
+                                    );
+                                    const payload = {
+                                      ...data,
+                                      category_id: matchedCategory?.id || null,
+                                    };
+                                    // 1. Send data to your API
+                                    await onUpdateInventory(payload); 
+                                    
+                                    // 2. Clear edit states to "get out of edit mode"
+                                    setEditingId(null);
+                                    setEditBuffer(null);
+                                    
+                                    // The parent state update in onUpdateInventory will refresh the data automatically
+                                  } catch (error) {
+                                    console.error("Save failed:", error);
+                                    // We keep editingId active here so the user doesn't lose their typed changes
+                                  }
+                                }}
+                              >
+                                SAVE
+                              </Button>
+                              <Button 
+                                size="sm" 
+                                variant="ghost" 
+                                className="h-7 px-2 text-[10px] text-gray-400 hover:bg-gray-50"
+                                onClick={() => setEditingId(null)}
+                              >
+                                CANCEL
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button 
+                              size="icon" 
+                              variant="ghost" 
+                              className="size-8"
+                              onClick={() => {
+                                setEditingId(product.id);
+                                setEditBuffer({ ...product });
+                              }}
+                            >
+                              <Edit2 className="size-3.5 text-slate-400" />
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+            </Table>
+          </div>
         </CardContent>
       </Card>
     {/* The Printing Factory: Optimized to match your printSelection state */}
@@ -942,7 +1007,7 @@ const handlePrintLabels = () => {
                       <td className="p-0">
                         <input 
                           type="number" step="any"
-                          className="w-full h-10 px-3 text-right outline-none font-mono font-bold text-blue-600" 
+                          className="w-full h-10 px-3 text-right outline-none font-mono font-bold text-gray-700" 
                           value={row.unit_price || ""}
                           onChange={(e) => {
                             const newRows = [...bulkRows];

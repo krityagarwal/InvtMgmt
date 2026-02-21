@@ -510,6 +510,7 @@ export interface ProformaInvoice {
   photo_url?: string;
   attribute_metadata?: { label: string; qty: number }[] // Ensure this matches
 }
+export type PrintDocumentType = "PI" | "INVOICE";
 interface ProformaInvoicesProps {
   invoices: ProformaInvoice[];
   products: Product[];
@@ -538,7 +539,9 @@ export function ProformaInvoices({
   const [isLoading, setIsLoading] = useState(false);
   useEffect(() => {
     if (initialDownloadId) {
-      setDownloadPI(initialDownloadId);
+      // From cart "PI" action: open in expanded view for review first.
+      setExpandedPIId(initialDownloadId);
+      onFetchDetails(initialDownloadId);
       onClearInitialDownload(); // Clear the signal in App.tsx
     }
   }, [initialDownloadId]);
@@ -681,16 +684,19 @@ export function ProformaInvoices({
   );
 }
 // Sanitized Layout: All colors converted to HEX to prevent html2canvas oklch crash
-function PrintLayout({ pi }: { pi?: ProformaInvoice }) {
+export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docType?: PrintDocumentType }) {
   if (!pi) return null;
-  const subtotal = pi.subtotal || (pi.items?.reduce((sum, i) => sum + i.price * i.quantity, 0) || 0);
-  const discountPercent = pi.discount_percent || pi.discount || 0;
-  const discountAmount = pi.discount_amount || (subtotal * discountPercent / 100);
+  const subtotal = pi.subtotal ?? (pi.items?.reduce((sum, i) => sum + i.price * i.quantity, 0) ?? 0);
+  const discountPercent = pi.discount_percent ?? pi.discount ?? 0;
+  const discountAmount = pi.discount_amount ?? (subtotal * discountPercent / 100);
   const taxableAmount = subtotal - discountAmount;
-  const taxPercent = pi.tax_percent || 18;
-  const taxAmount = pi.tax_amount || (taxableAmount * taxPercent / 100);
-  const finalTotal = pi.final_total || (taxableAmount + taxAmount);
+  const taxPercent = pi.tax_percent ?? 18;
+  const taxAmount = pi.tax_amount ?? (taxableAmount * taxPercent / 100);
+  const finalTotal = pi.final_total ?? (taxableAmount + taxAmount);
   const balanceDue = finalTotal - (pi.paidAmount || 0);
+  const docTitle = docType === "INVOICE" ? "Invoice" : "Proforma Invoice";
+  const docPrefix = docType === "INVOICE" ? "INV" : "PI";
+  const docNumber = pi.piNumber || `${docPrefix}-${String(pi.id).slice(0, 8).toUpperCase()}`;
   return (
     <div style={{ backgroundColor: '#ffffff', color: '#1a1a1a', padding: '48px', fontFamily: "'Segoe UI', 'Helvetica Neue', Arial, sans-serif", maxWidth: '210mm', margin: '0 auto' }}>
       {/* Top accent bar */}
@@ -708,25 +714,26 @@ function PrintLayout({ pi }: { pi?: ProformaInvoice }) {
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ display: 'inline-block', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '16px 24px' }}>
-            <p style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '2px', color: '#94a3b8', margin: 0, fontWeight: '600' }}>Proforma Invoice</p>
-            <p style={{ fontSize: '22px', fontWeight: '800', color: '#0f172a', margin: '4px 0 0 0', fontFamily: 'monospace' }}>#{pi.piNumber}</p>
+            <p style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '2px', color: '#94a3b8', margin: 0, fontWeight: '600' }}>{docTitle}</p>
+            <p style={{ fontSize: '22px', fontWeight: '800', color: '#0f172a', margin: '4px 0 0 0', fontFamily: 'monospace' }}>#{docNumber}</p>
           </div>
           <p style={{ fontSize: '12px', color: '#64748b', marginTop: '10px' }}>
             Issued: <strong style={{ color: '#334155' }}>{new Date(pi.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</strong>
           </p>
         </div>
       </div>
-      {/* Bill To / Ship To */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '36px' }}>
-        <div style={{ padding: '20px', backgroundColor: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #2563eb' }}>
-          <p style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1.5px', color: '#94a3b8', fontWeight: '700', margin: '0 0 10px 0' }}>Bill To</p>
-          <p style={{ fontWeight: '700', fontSize: '16px', margin: 0, color: '#0f172a' }}>{pi.clientName}</p>
-          {pi.clientPhone && <p style={{ fontSize: '12px', color: '#475569', marginTop: '6px' }}>📞 {pi.clientPhone}</p>}
-          {pi.referralSource && <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>Ref: {pi.referralSource}</p>}
+      {/* Bill To / Ship To (Concise) */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '24px' }}>
+        <div style={{ padding: '12px 14px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+          <p style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1.2px', color: '#94a3b8', fontWeight: '700', margin: 0 }}>Bill To</p>
+          <p style={{ fontWeight: '700', fontSize: '14px', margin: '6px 0 0 0', color: '#0f172a' }}>{pi.clientName || "Walk-in Customer"}</p>
+          <p style={{ fontSize: '11px', color: '#475569', margin: '4px 0 0 0' }}>
+            {[pi.clientPhone, pi.referralSource ? `Ref: ${pi.referralSource}` : ""].filter(Boolean).join("  |  ") || "-"}
+          </p>
         </div>
-        <div style={{ padding: '20px', backgroundColor: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #64748b' }}>
-          <p style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1.5px', color: '#94a3b8', fontWeight: '700', margin: '0 0 10px 0' }}>Ship To</p>
-          <p style={{ fontSize: '13px', color: '#334155', lineHeight: '1.6', margin: 0 }}>{pi.deliveryAddress || 'Store Pickup'}</p>
+        <div style={{ padding: '12px 14px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+          <p style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1.2px', color: '#94a3b8', fontWeight: '700', margin: 0 }}>Ship To</p>
+          <p style={{ fontSize: '12px', color: '#334155', lineHeight: '1.4', margin: '6px 0 0 0' }}>{pi.deliveryAddress || "Store Pickup"}</p>
         </div>
       </div>
       {/* Items Table */}

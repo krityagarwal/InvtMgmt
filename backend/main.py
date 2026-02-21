@@ -565,16 +565,16 @@ async def get_basket_details(order_id: str):
                 return {
                     "order_items": formatted_items,
                     "status": order_data['status'],
-                    "discount_percent": order_data['discount_percent'] or 0,
-                    "discount_amount": float(order_data['discount_amount'] or 0),
-                    "tax_percent": order_data['tax_percent'] or 18,
-                    "tax_amount": float(order_data['tax_amount'] or 0),
-                    "subtotal": float(order_data['subtotal'] or 0),
-                    "final_total": float(order_data['final_total'] or 0),
+                    "discount_percent": order_data['discount_percent'] if order_data['discount_percent'] is not None else 0,
+                    "discount_amount": float(order_data['discount_amount']) if order_data['discount_amount'] is not None else 0.0,
+                    "tax_percent": order_data['tax_percent'] if order_data['tax_percent'] is not None else 18,
+                    "tax_amount": float(order_data['tax_amount']) if order_data['tax_amount'] is not None else 0.0,
+                    "subtotal": float(order_data['subtotal']) if order_data['subtotal'] is not None else 0.0,
+                    "final_total": float(order_data['final_total']) if order_data['final_total'] is not None else 0.0,
                     "referral_source": order_data['referral_source'] or "",
                     "delivery_address": order_data['delivery_address'] or "",
                     "client_phone": order_data['client_phone'] or "",
-                    "paid_amount": float(order_data['paid_amount'] or 0)
+                    "paid_amount": float(order_data['paid_amount']) if order_data['paid_amount'] is not None else 0.0
                 }
     except Exception as e:
         logger.error(f"Error fetching basket details: {e}")

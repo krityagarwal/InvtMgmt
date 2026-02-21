@@ -31,13 +31,61 @@ export const BulkRow = React.memo(({ row, categoryOptions, onUpdate, onRemove }:
     onUpdate(row.id, field, value);
   };
 
+  // Keep financial behavior aligned with Inventory edit-row logic:
+  // Cost -> Landing(5%) -> Selling(2.5x, rounded)
+  // Landing (manual) -> Selling(2.5x, rounded)
+  const handleCostPriceChange = (rawValue: string) => {
+    if (rawValue === "") {
+      setLocalValues((prev: any) => ({ ...prev, cost_price: "", overhead: "", unit_price: "" }));
+      onUpdate(row.id, "cost_price", "");
+      onUpdate(row.id, "overhead", "");
+      onUpdate(row.id, "unit_price", "");
+      return;
+    }
+
+    const baseCost = Number(rawValue);
+    if (Number.isNaN(baseCost)) return;
+    const landingPrice = Math.round(baseCost * 1.05 * 100) / 100;
+    const sellingPrice = Math.round(landingPrice * 2.5);
+
+    setLocalValues((prev: any) => ({
+      ...prev,
+      cost_price: rawValue,
+      overhead: landingPrice,
+      unit_price: sellingPrice,
+    }));
+    onUpdate(row.id, "cost_price", rawValue);
+    onUpdate(row.id, "overhead", landingPrice);
+    onUpdate(row.id, "unit_price", sellingPrice);
+  };
+
+  const handleLandingPriceChange = (rawValue: string) => {
+    if (rawValue === "") {
+      setLocalValues((prev: any) => ({ ...prev, overhead: "", unit_price: "" }));
+      onUpdate(row.id, "overhead", "");
+      onUpdate(row.id, "unit_price", "");
+      return;
+    }
+
+    const manualLanding = Number(rawValue);
+    if (Number.isNaN(manualLanding)) return;
+    const sellingPrice = Math.round(manualLanding * 2.5);
+
+    setLocalValues((prev: any) => ({
+      ...prev,
+      overhead: rawValue,
+      unit_price: sellingPrice,
+    }));
+    onUpdate(row.id, "overhead", rawValue);
+    onUpdate(row.id, "unit_price", sellingPrice);
+  };
+
   return (
     <tr className="divide-x divide-slate-100 hover:bg-blue-50/30 transition-colors">
       <td className="p-1 w-14">
         <div className="relative size-10 mx-auto border rounded bg-slate-50 overflow-hidden">
           {localValues.photo_url ? (
-            <img src={localValues.photo_url} className="size-full object-contain cursor-zoom-in" 
-            onClick={() => setSelectedImage(row.photo_url)}/>
+            <img src={localValues.photo_url} className="size-full object-contain cursor-zoom-in" />
           ) : (
             <Plus className="size-3 m-auto absolute inset-0 text-slate-300" />
           )}
@@ -88,7 +136,7 @@ export const BulkRow = React.memo(({ row, categoryOptions, onUpdate, onRemove }:
           type="number" step="any" 
           className="w-full h-10 px-3 text-right outline-none font-mono" 
           value={localValues.cost_price || ""} 
-          onChange={(e) => handleChange('cost_price', e.target.value)} 
+          onChange={(e) => handleCostPriceChange(e.target.value)} 
         />
       </td>
       <td className="p-0">
@@ -96,7 +144,7 @@ export const BulkRow = React.memo(({ row, categoryOptions, onUpdate, onRemove }:
           type="number" step="any" 
           className="w-full h-10 px-3 text-right outline-none font-mono" 
           value={localValues.overhead || ""} 
-          onChange={(e) => handleChange('overhead', e.target.value)} 
+          onChange={(e) => handleLandingPriceChange(e.target.value)} 
         />
       </td>
       <td className="p-0">
@@ -104,7 +152,8 @@ export const BulkRow = React.memo(({ row, categoryOptions, onUpdate, onRemove }:
           type="number" step="any" 
           className="w-full h-10 px-3 text-right outline-none font-mono font-bold text-blue-600" 
           value={localValues.unit_price || ""} 
-          onChange={(e) => handleChange('unit_price', e.target.value)} 
+          readOnly
+          tabIndex={-1}
         />
       </td>
       <td className="p-0">

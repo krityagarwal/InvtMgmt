@@ -5,11 +5,13 @@ import { Inventory, ExtendedProduct } from "./components/Inventory";
 import { Orders, Order } from "./components/Orders";
 import { Cart, CartItem } from "./components/Cart";
 import { CartManager, ClientCart } from "./components/CartManager";
-import { ProformaInvoices, ProformaInvoice } from "./components/ProformaInvoices";
+import { ProformaInvoices, ProformaInvoice, PrintLayout, PrintDocumentType } from "./components/ProformaInvoices";
 import { Button } from "./components/ui/button";
 import { Badge } from "./components/ui/badge";
 import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 import { Session } from "@supabase/supabase-js";
 import {
   Dialog,
@@ -55,6 +57,12 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const bootstrapDoneRef = useRef(false);
   const [inventoryReady, setInventoryReady] = useState(false);
+  const cartDraftRef = useRef<Record<string, { discount?: number; tax?: number }>>({});
+  const [showPIPreview, setShowPIPreview] = useState(false);
+  const [piPreviewUrl, setPiPreviewUrl] = useState<string | null>(null);
+  const [piPreviewData, setPiPreviewData] = useState<ProformaInvoice | null>(null);
+  const [previewDocType, setPreviewDocType] = useState<PrintDocumentType>("PI");
+  const previewPdfUrlRef = useRef<string | null>(null);
 
   const activeCart = clientCarts.find((cart) => cart.id === activeCartId);
   const [autoDownloadPIId, setAutoDownloadPIId] = useState<string | null>(null);
@@ -120,6 +128,14 @@ useEffect(() => {
 useEffect(() => {
   viewRef.current = currentView;
 }, [currentView]);
+
+useEffect(() => {
+  return () => {
+    if (previewPdfUrlRef.current) {
+      URL.revokeObjectURL(previewPdfUrlRef.current);
+    }
+  };
+}, []);
 
 
   useEffect(() => {
@@ -224,6 +240,9 @@ useEffect(() => {
     if (updatedProduct.displayStock !== original.displayStock) patchPayload.qty_display = updatedProduct.displayStock;
     if (updatedProduct.godownStock !== original.godownStock) patchPayload.qty_godown = updatedProduct.godownStock;
     if (updatedProduct.remark !== original.remark) patchPayload.remark = updatedProduct.remark;
+    if (updatedProduct.category !== original.category && updatedProduct.category_id) {
+      patchPayload.category_id = updatedProduct.category_id;
+    }
 
     if (Object.keys(patchPayload).length === 0) return;
 
@@ -324,14 +343,17 @@ const handleBulkAdd = async (newItems: any[]) => {
       // 3. Fetch details for each active bucket
       const cartPromises = activeBuckets.map(async (order: any) => {
       const details = await apiCall(`${API_BASE_URL}/basket/details/${order.id}`);
-      console.log("Details for order ID:", handleLoadActiveCarts);
 
         return {
           id: order.id,
           clientName: order.client_name,
+          clientPhone: order.client_phone ?? details.client_phone ?? "",
+          referralSource: order.referral_source ?? details.referral_source ?? "",
+          deliveryAddress: order.delivery_address ?? details.delivery_address ?? "",
           createdAt: order.created_at,
-          discount: order.discount_percent || 0,
-          tax: order.tax_percent || 18,
+          discount: order.discount_percent ?? 0,
+          tax: order.tax_percent ?? 18,
+          advancePaid: order.paid_amount ?? details.paid_amount ?? 0,
           // Map backend items to your CartItem interface
           items: details.order_items.map((item: any) => ({
             id: item.product_id,
@@ -441,8 +463,15 @@ const handleBulkAdd = async (newItems: any[]) => {
     }
   };
 
-const handleAddToCart = async (product: Product, quantity: number = 1, attribute: string) => {
-    // 1. If no active cart, show dialog to select or create cart
+const handleAddToCart = async (product: Product, quantity: number = 1, attribute: string = "None") => {
+    if (!product) return;
+
+    if (!attribute) {
+      toast.error("Please select a room/location");
+      return;
+    }  
+  
+  // 1. If no active cart, show dialog to select or create cart
     if (!activeCartId) {
       setPendingProduct(product);
       setPendingQuantity(quantity); 
@@ -714,10 +743,116 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     }
   };
 
+  const renderDocumentPdf = async (
+    doc: ProformaInvoice,
+    docType: PrintDocumentType
+  ) => {
+    setPreviewDocType(docType);
+    setPiPreviewData(doc);
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const element = document.getElementById("printable-pi-preview");
+    if (!element) throw new Error("Preview template render failed");
+
+    const images = element.getElementsByTagName("img");
+    await Promise.all(
+      Array.from(images).map((img) => {
+        if (img.complete) return Promise.resolve();
+        return new Promise((resolve) => {
+          img.onload = resolve;
+          img.onerror = resolve;
+        });
+      })
+    );
+
+    const canvas = await html2canvas(element, {
+      scale: 2,
+      useCORS: true,
+      allowTaint: false,
+      logging: false,
+      backgroundColor: "#ffffff",
+      imageTimeout: 15000,
+    });
+    const imgData = canvas.toDataURL("image/png");
+    const pdf = new jsPDF("p", "mm", "a4");
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+    pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
+    return pdf;
+  };
+
+  const openDocumentPreview = async (
+    doc: ProformaInvoice,
+    docType: PrintDocumentType
+  ) => {
+    const pdf = await renderDocumentPdf(doc, docType);
+    const blobUrl = URL.createObjectURL(pdf.output("blob"));
+
+    if (previewPdfUrlRef.current) {
+      URL.revokeObjectURL(previewPdfUrlRef.current);
+    }
+    previewPdfUrlRef.current = blobUrl;
+    setPiPreviewUrl(blobUrl);
+    setShowPIPreview(true);
+  };
+
+  const handleDownloadInvoice = async (orderId: string) => {
+    try {
+      const target = orders.find((o) => o.id === orderId);
+      if (!target) return;
+
+      const details = await apiCall(`${API_BASE_URL}/basket/details/${orderId}`);
+      const invoiceDoc: ProformaInvoice = {
+        id: orderId,
+        piNumber: target.orderNumber,
+        clientName: target.customerName,
+        items: (details.order_items || []).map((item: any) => ({
+          name: item.item_code,
+          quantity: item.quantity,
+          price: item.unit_price,
+          photo_url: item.photo_url,
+          attribute_metadata: item.attribute_metadata || [],
+        })),
+        discount: target.discount || 0,
+        status: "approved",
+        createdAt: target.date,
+        updatedAt: target.date,
+        subtotal: details.subtotal || target.subtotal || 0,
+        discount_amount: details.discount_amount || target.discount_amount || 0,
+        discount_percent: details.discount_percent ?? target.discount_percent ?? target.discount ?? 0,
+        tax_percent: details.tax_percent ?? target.tax_percent ?? 18,
+        tax_amount: details.tax_amount || target.tax_amount || 0,
+        final_total: details.final_total || target.final_total || target.total || 0,
+        total: details.final_total || target.total || 0,
+        paidAmount: target.paidAmount || 0,
+        clientPhone: details.client_phone || target.clientPhone || "",
+        referralSource: details.referral_source || target.referralSource || "",
+        deliveryAddress: details.delivery_address || target.deliveryAddress || "",
+      };
+
+      const pdf = await renderDocumentPdf(invoiceDoc, "INVOICE");
+      pdf.save(`Invoice_${target.orderNumber}_${target.customerName}.pdf`);
+      toast.success("Invoice downloaded");
+    } catch (error) {
+      console.error("Invoice download failed:", error);
+      toast.error("Failed to download invoice");
+    }
+  };
+
   const handleCheckout = async () => {
     if (!activeCartId) return;
 
-    const activeCart = clientCarts.find((c) => c.id === activeCartId);
+    const activeCart = (() => {
+      const cart = clientCarts.find((c) => c.id === activeCartId);
+      if (!cart) return null;
+      const draft = cartDraftRef.current[activeCartId] || {};
+      return {
+        ...cart,
+        discount: draft.discount ?? cart.discount,
+        tax: draft.tax ?? cart.tax,
+      };
+    })();
     if (!activeCart) return;
 
     // 1. FINAL VALIDATION: Check stock one last time
@@ -754,12 +889,43 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         body: JSON.stringify(payload),
       });
 
-      toast.success(`Sale finalized! Paid: ₹${payload.paid_amount}`);
+      const invoiceDetails = await apiCall(`${API_BASE_URL}/basket/details/${activeCartId}`);
+      const previewInvoice: ProformaInvoice = {
+        id: activeCartId,
+        piNumber: activeCartId.slice(0, 8).toUpperCase(),
+        clientName: activeCart.clientName,
+        items: (invoiceDetails.order_items || []).map((item: any) => ({
+          name: item.item_code,
+          quantity: item.quantity,
+          price: item.unit_price,
+          photo_url: item.photo_url,
+          attribute_metadata: item.attribute_metadata || [],
+        })),
+        discount: Number(activeCart.discount) || 0,
+        status: "approved",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        subtotal: invoiceDetails.subtotal || 0,
+        discount_amount: invoiceDetails.discount_amount || 0,
+        discount_percent: invoiceDetails.discount_percent ?? (Number(activeCart.discount) || 0),
+        tax_percent: invoiceDetails.tax_percent ?? (activeCart.tax !== undefined ? Number(activeCart.tax) : 18),
+        tax_amount: invoiceDetails.tax_amount || 0,
+        final_total: invoiceDetails.final_total || 0,
+        total: invoiceDetails.final_total || 0,
+        paidAmount: Number(activeCart.advancePaid) || 0,
+        clientPhone: activeCart.clientPhone || "",
+        referralSource: activeCart.referralSource || "",
+        deliveryAddress: activeCart.deliveryAddress || "",
+      };
+      await openDocumentPreview(previewInvoice, "INVOICE");
+
+      toast.success(`Sale finalized! Paid: ₹${payload.paid_amount}. Invoice preview opened.`);
       
       // Refresh and Reset state
       await handleLoadInventory();
       setActiveCartId(null);
       setClientCarts((prev) => prev.filter((c) => c.id !== activeCartId));
+      delete cartDraftRef.current[activeCartId];
       setCurrentView("orders");
     } catch (error) {
       console.error("Checkout error:", error);
@@ -826,6 +992,12 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
 
   const updateCartTax = (cartId: string | null, newTax: number | "") => {
     const taxValue = newTax === "" ? 18 : newTax; // Default to 18 if empty
+    if (cartId) {
+      cartDraftRef.current[cartId] = {
+        ...cartDraftRef.current[cartId],
+        tax: Number(taxValue),
+      };
+    }
     setClientCarts((prevCarts) =>
       prevCarts.map((cart) =>
         cart.id === cartId ? { ...cart, tax: taxValue } : cart
@@ -835,6 +1007,10 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
 
   const handleUpdateDiscount = (discount: number) => {
     if (!activeCartId) return;
+    cartDraftRef.current[activeCartId] = {
+      ...cartDraftRef.current[activeCartId],
+      discount: Number(discount) || 0,
+    };
 
     setClientCarts((prev) =>
       prev.map((cart) => {
@@ -866,7 +1042,18 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
   };
 
   const handleSaveCart = async () => {
-    if (!activeCartId || !activeCart) return;
+    if (!activeCartId) return;
+    const activeCart = (() => {
+      const cart = clientCarts.find((c) => c.id === activeCartId);
+      if (!cart) return null;
+      const draft = cartDraftRef.current[activeCartId] || {};
+      return {
+        ...cart,
+        discount: draft.discount ?? cart.discount,
+        tax: draft.tax ?? cart.tax,
+      };
+    })();
+    if (!activeCart) return;
     try {
       await apiCall(`${API_BASE_URL}/order/update-status`, {
         method: "POST",
@@ -882,6 +1069,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
           client_phone: activeCart.clientPhone || ""
         }),
       });
+      delete cartDraftRef.current[activeCartId];
       toast.success("Progress saved to database");
     } catch (error) {
       console.error("Save failed:", error);
@@ -890,17 +1078,28 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
 
   // 3. Updated Generate PI (Save + Convert + Trigger Download)
   const handleGeneratePI = async () => {
-    if (!activeCartId || !activeCart) return;
+    if (!activeCartId) return;
+    const activeCart = (() => {
+      const cart = clientCarts.find((c) => c.id === activeCartId);
+      if (!cart) return null;
+      const draft = cartDraftRef.current[activeCartId] || {};
+      return {
+        ...cart,
+        discount: draft.discount ?? cart.discount,
+        tax: draft.tax ?? cart.tax,
+      };
+    })();
+    if (!activeCart) return;
     const cartIdToConvert = activeCartId;
     
     try {
-      // A. Update status and metadata
+      // A. Persist PI status and latest metadata using existing endpoint
       await apiCall(`${API_BASE_URL}/order/update-status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           order_id: cartIdToConvert, 
-          status: "pi", // Move to PI list
+          status: "pi",
           discount_percent: Number(activeCart.discount) || 0,
           tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 18,
           paid_amount: activeCart.advancePaid || 0,
@@ -910,17 +1109,53 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         }),
       });
 
-      // B. Pre-fetch details (photos/attributes) so PDF is ready immediately
-      await fetchOrderItems(cartIdToConvert);
+      // B. Fetch latest PI data and build the exact same document payload used earlier
+      const piDetails = await apiCall(`${API_BASE_URL}/basket/details/${cartIdToConvert}`);
+      const effectiveDiscount = Number(activeCart.discount) || 0;
+      const effectiveTax = activeCart.tax !== undefined ? Number(activeCart.tax) : 18;
+      const subtotal = Number(piDetails.subtotal) || 0;
+      const discountAmount = subtotal * (effectiveDiscount / 100);
+      const taxableAmount = subtotal - discountAmount;
+      const taxAmount = taxableAmount * (effectiveTax / 100);
+      const finalTotal = taxableAmount + taxAmount;
+      const previewPI: ProformaInvoice = {
+        id: cartIdToConvert,
+        piNumber: cartIdToConvert.slice(0, 8).toUpperCase(),
+        clientName: activeCart.clientName,
+        items: (piDetails.order_items || []).map((item: any) => ({
+          name: item.item_code,
+          quantity: item.quantity,
+          price: item.unit_price,
+          photo_url: item.photo_url,
+          attribute_metadata: item.attribute_metadata || [],
+        })),
+        discount: effectiveDiscount,
+        status: "draft",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        subtotal,
+        discount_amount: discountAmount,
+        discount_percent: effectiveDiscount,
+        tax_percent: effectiveTax,
+        tax_amount: taxAmount,
+        final_total: finalTotal,
+        total: finalTotal,
+        paidAmount: Number(activeCart.advancePaid) || 0,
+        clientPhone: activeCart.clientPhone || "",
+        referralSource: activeCart.referralSource || "",
+        deliveryAddress: activeCart.deliveryAddress || "",
+      };
 
-      // C. Clean up state and switch view
+      await openDocumentPreview(previewPI, "PI");
+
+      // C. Sync PI list and clean up cart state
+      await fetchOrderItems(cartIdToConvert);
+      await handleLoadProformaInvoices();
       setClientCarts((prev) => prev.filter((c) => c.id !== cartIdToConvert));
       setActiveCartId(null);
-      setCurrentView("proforma");
-      
-      // D. Trigger the download state
-      setAutoDownloadPIId(cartIdToConvert); 
-      toast.success("PI Generated! Starting download...");
+      delete cartDraftRef.current[cartIdToConvert];
+      setAutoDownloadPIId(null); 
+      toast.success("PI generated. Preview opened.");
     } catch (error) {
       toast.error("Failed to generate PI");
     }
@@ -946,8 +1181,8 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         id: pi.id,
         clientName: pi.clientName,
         items: freshItems,
-        discount: data.discount_percent || 0,
-        tax: data.tax_percent || 18,
+        discount: data.discount_percent ?? 0,
+        tax: data.tax_percent ?? 18,
         advancePaid: data.paid_amount || 0,
         referralSource: data.referral_source || "",
         deliveryAddress: data.delivery_address || "",
@@ -1350,7 +1585,12 @@ return (
             )}
 
             {currentView === "orders" && (
-              <Orders orders={orders} onFetchDetails={fetchOrderItems} onRecordPayment={handleRecordPayment} />
+              <Orders
+                orders={orders}
+                onFetchDetails={fetchOrderItems}
+                onRecordPayment={handleRecordPayment}
+                onDownloadInvoice={handleDownloadInvoice}
+              />
             )}
 
             {currentView === "cart" && (
@@ -1422,8 +1662,156 @@ return (
       )}
 
       {/* 5. Global Dialogs (Stable even during view changes) */}
+      <Dialog
+        open={showPIPreview}
+        onOpenChange={(open) => {
+          setShowPIPreview(open);
+          if (!open) {
+            setPiPreviewData(null);
+          }
+        }}
+      >
+        <DialogContent className="w-[95vw] max-w-6xl">
+          <DialogHeader>
+            <DialogTitle>{previewDocType === "INVOICE" ? "Invoice Preview" : "PI Preview"}</DialogTitle>
+          </DialogHeader>
+          {piPreviewUrl ? (
+            <iframe
+              src={piPreviewUrl}
+              className="w-full h-[80vh] border rounded-md"
+              title="PI PDF Preview"
+            />
+          ) : (
+            <div className="h-[80vh] flex items-center justify-center text-sm text-gray-500">
+              Preview unavailable
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowPIPreview(false)}>
+              Close
+            </Button>
+            {piPreviewUrl && (
+              <Button
+                onClick={() => window.open(piPreviewUrl, "_blank", "noopener,noreferrer")}
+              >
+                Open In New Tab
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <div
+        id="printable-pi-preview"
+        style={{
+          position: "absolute",
+          top: "-10000px",
+          left: "-10000px",
+          backgroundColor: "#ffffff",
+          color: "#000000",
+          width: "210mm",
+        }}
+      >
+        {piPreviewData && <PrintLayout pi={piPreviewData} docType={previewDocType} />}
+      </div>
+
       <Dialog open={showClientDialog} onOpenChange={setShowClientDialog}>
-        {/* ... dialog content remains exactly as you had it ... */}
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Select or Create Client Cart</DialogTitle>
+          </DialogHeader>
+          <div className="py-4 space-y-4">
+            {clientCarts.length > 0 && (
+              <div>
+                <h4 className="text-sm font-medium mb-2">Existing Carts</h4>
+                <div className="space-y-2">
+                  {clientCarts.map((cart) => (
+                    <Button
+                      key={cart.id}
+                      variant="outline"
+                      className="w-full justify-start"
+                      onClick={() => handleSelectExistingCart(cart.id)}
+                    >
+                      <ShoppingCart className="size-4 mr-2" />
+                      {cart.clientName} ({cart.items.length} items)
+                    </Button>
+                  ))}
+                </div>
+                <div className="relative my-4">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t"></div>
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-white px-2 text-gray-500">Or</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <h4 className="text-sm font-medium border-b pb-1">New Cart</h4>
+              <div>
+                <Label className="text-[10px] uppercase font-bold text-gray-400">
+                  Client Name *
+                </Label>
+                <Input
+                  type="text"
+                  placeholder="Enter client name..."
+                  value={newClientName}
+                  onChange={(e) => setNewClientName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
+                  autoFocus
+                  className="mt-1"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-[10px] uppercase font-bold text-gray-400">
+                    Phone
+                  </Label>
+                  <Input
+                    type="tel"
+                    placeholder="Contact number"
+                    value={clientPhone}
+                    onChange={(e) => setClientPhone(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
+                    className="mt-1 text-sm"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[10px] uppercase font-bold text-gray-400">
+                    Referral / Partner
+                  </Label>
+                  <Input
+                    type="text"
+                    placeholder="Designer, Agent, etc."
+                    value={referralSource}
+                    onChange={(e) => setReferralSource(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
+                    className="mt-1 text-sm"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowClientDialog(false);
+                setPendingProduct(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateNewCartFromDialog}
+              disabled={!newClientName.trim()}
+            >
+              Create New Cart
+            </Button>
+          </DialogFooter>
+        </DialogContent>
       </Dialog>
     </div>
   );

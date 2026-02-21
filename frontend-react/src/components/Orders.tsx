@@ -1,7 +1,8 @@
 import React, { useState } from "react";
-import { Package, Calendar, DollarSign, User, ChevronDown, ChevronRight } from "lucide-react";
+import { Package, Calendar, DollarSign, ChevronDown, ChevronRight, Download } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
 import {
   Table,
   TableBody,
@@ -44,9 +45,10 @@ interface OrdersProps {
   orders: Order[];
   onFetchDetails: (orderId: string) => void;
   onRecordPayment: (orderId: string, amount: number, method: string) => void; // Add this 
+  onDownloadInvoice: (orderId: string) => void;
 }
 
-export function Orders({ orders, onFetchDetails, onRecordPayment }: OrdersProps) {
+export function Orders({ orders, onFetchDetails, onRecordPayment, onDownloadInvoice }: OrdersProps) {
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
   const toggleExpand = (orderId: string) => {
@@ -113,9 +115,9 @@ export function Orders({ orders, onFetchDetails, onRecordPayment }: OrdersProps)
               <TabsTrigger value="pending">Pending</TabsTrigger>
               <TabsTrigger value="completed">Completed</TabsTrigger>
             </TabsList>
-            <TabsContent value="all"><OrderTable orders={orders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} onRecordPayment={onRecordPayment} /></TabsContent>
-            <TabsContent value="pending"><OrderTable orders={pendingOrders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} onRecordPayment={onRecordPayment} /></TabsContent>
-            <TabsContent value="completed"><OrderTable orders={completedOrders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} onRecordPayment={onRecordPayment} /></TabsContent>
+            <TabsContent value="all"><OrderTable orders={orders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} onRecordPayment={onRecordPayment} onDownloadInvoice={onDownloadInvoice} /></TabsContent>
+            <TabsContent value="pending"><OrderTable orders={pendingOrders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} onRecordPayment={onRecordPayment} onDownloadInvoice={onDownloadInvoice} /></TabsContent>
+            <TabsContent value="completed"><OrderTable orders={completedOrders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} onRecordPayment={onRecordPayment} onDownloadInvoice={onDownloadInvoice} /></TabsContent>
           </Tabs>
         </CardContent>
       </Card>
@@ -123,7 +125,7 @@ export function Orders({ orders, onFetchDetails, onRecordPayment }: OrdersProps)
   );
 }
 
-function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, onRecordPayment }: any) {
+function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, onRecordPayment, onDownloadInvoice }: any) {
   return (
     <Table>
       <TableHeader>
@@ -136,6 +138,7 @@ function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, o
           <TableHead>Paid</TableHead>
           <TableHead>Balance</TableHead>
           <TableHead>Status</TableHead>
+          <TableHead className="text-right">Actions</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -154,11 +157,26 @@ function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, o
                 ₹{(order.total - (order.paidAmount || 0)).toLocaleString()}
               </TableCell>
               <TableCell><Badge className={getStatusColor(order.status)}>{order.status}</Badge></TableCell>
+              <TableCell className="text-right">
+                {order.status === "sold" && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title="Download Invoice"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDownloadInvoice(order.id);
+                    }}
+                  >
+                    <Download className="size-4" />
+                  </Button>
+                )}
+              </TableCell>
             </TableRow>
             
             {expandedOrderId === order.id && (
               <TableRow>
-                <TableCell colSpan={6} className="bg-gray-50/50 p-0">
+                <TableCell colSpan={9} className="bg-gray-50/50 p-0">
                   <OrderDetailsView
                     clientName={order.customerName}
                     date={order.date}
