@@ -57,11 +57,46 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const bootstrapDoneRef = useRef(false);
   const [inventoryReady, setInventoryReady] = useState(false);
-  const cartDraftRef = useRef<Record<string, { discount?: number; tax?: number }>>({});
+  const [orderSummary, setOrderSummary] = useState({
+    totalRevenue: 0,
+    totalReceived: 0,
+    totalDue: 0,
+    estimatedProfit: 0,
+  });
+  const cartDraftRef = useRef<Record<string, { discount?: number; tax?: number; pricingMode?: "discount" | "finalized"; finalTotalOverride?: number }>>({});
   const [showPIPreview, setShowPIPreview] = useState(false);
   const [piPreviewUrl, setPiPreviewUrl] = useState<string | null>(null);
   const [piPreviewData, setPiPreviewData] = useState<ProformaInvoice | null>(null);
   const [previewDocType, setPreviewDocType] = useState<PrintDocumentType>("PI");
+  const [pendingSellContext, setPendingSellContext] = useState<{
+    orderId: string;
+    payload: {
+      order_id: string;
+      discount_percent: number;
+      tax_percent: number;
+      paid_amount: number;
+      final_total_override?: number | null;
+      referral_source: string;
+      delivery_address: string;
+      client_phone: string;
+    };
+  } | null>(null);
+  const [isConfirmingSell, setIsConfirmingSell] = useState(false);
+  const [pendingPIContext, setPendingPIContext] = useState<{
+    orderId: string;
+    payload: {
+      order_id: string;
+      status: string;
+      discount_percent: number;
+      tax_percent: number;
+      paid_amount: number;
+      final_total_override?: number | null;
+      referral_source: string;
+      delivery_address: string;
+      client_phone: string;
+    };
+  } | null>(null);
+  const [isConfirmingPI, setIsConfirmingPI] = useState(false);
   const previewPdfUrlRef = useRef<string | null>(null);
 
   const activeCart = clientCarts.find((cart) => cart.id === activeCartId);
@@ -170,26 +205,7 @@ useEffect(() => {
           break;
 
         case "orders":
-          if (orders.length === 0) {
-            const data = await apiCall(
-              `${API_BASE_URL}/orders/list/${PRESELECTED_SHOP_ID}`
-            );
-
-            const mappedOrders = data.map((o: any) => ({
-              id: o.id,
-              orderNumber: o.id.slice(0, 8).toUpperCase(),
-              customerName: o.client_name || "Unknown",
-              total: o.final_total || 0,
-              status: o.status,
-              date: new Date(o.created_at).toLocaleDateString(),
-              discount: o.discount_percent || 0,
-              paidAmount: o.paid_amount || 0,
-              discountAmount: o.discount_amount || 0,
-              taxAmount: o.tax_amount || 0
-            }));
-
-            setOrders(mappedOrders);
-          }
+          await handleLoadOrders();
           break;
       }
     } catch (error) {
@@ -222,6 +238,23 @@ useEffect(() => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const calculateRoundedBilling = (
+    subtotal: number,
+    discountPercent: number,
+    taxPercent: number
+  ) => {
+    const safeSubtotal = Number(subtotal) || 0;
+    const safeDiscount = Number(discountPercent) || 0;
+    const safeTax = Number(taxPercent) || 0;
+
+    const discountAmount = Math.floor(safeSubtotal * (safeDiscount / 100));
+    const taxableAmount = Math.max(0, safeSubtotal - discountAmount);
+    const taxAmount = Math.ceil(taxableAmount * (safeTax / 100));
+    const finalTotal = taxableAmount + taxAmount;
+
+    return { discountAmount, taxAmount, finalTotal };
   };
 
   // Inside App.tsx
@@ -352,7 +385,7 @@ const handleBulkAdd = async (newItems: any[]) => {
           deliveryAddress: order.delivery_address ?? details.delivery_address ?? "",
           createdAt: order.created_at,
           discount: order.discount_percent ?? 0,
-          tax: order.tax_percent ?? 18,
+          tax: order.tax_percent ?? 0,
           advancePaid: order.paid_amount ?? details.paid_amount ?? 0,
           // Map backend items to your CartItem interface
           items: details.order_items.map((item: any) => ({
@@ -378,10 +411,13 @@ const handleBulkAdd = async (newItems: any[]) => {
     }
   };
   // On-demand: Load orders when button is clicked
-  const handleLoadOrders = async () => {
-    if (ordersLoaded) return; // Don't reload if already loaded
+  const handleLoadOrders = async (force = false) => {
+    if (ordersLoaded && !force) return; // Don't reload if already loaded
     try {
-      const data = await apiCall(`${API_BASE_URL}/orders/list/${PRESELECTED_SHOP_ID}`);
+      const [data, summary] = await Promise.all([
+        apiCall(`${API_BASE_URL}/orders/list/${PRESELECTED_SHOP_ID}`),
+        apiCall(`${API_BASE_URL}/orders/summary/${PRESELECTED_SHOP_ID}`),
+      ]);
       
       const mappedOrders: Order[] = data.map((o: any) => ({
         id: o.id,
@@ -398,6 +434,12 @@ const handleBulkAdd = async (newItems: any[]) => {
       }));
       
       setOrders(mappedOrders);
+      setOrderSummary({
+        totalRevenue: Number(summary.total_revenue) || 0,
+        totalReceived: Number(summary.total_received) || 0,
+        totalDue: Number(summary.total_due) || 0,
+        estimatedProfit: Number(summary.estimated_profit) || 0,
+      });
       setOrdersLoaded(true);
     } catch (error) {
       console.error("Failed to load orders:", error);
@@ -593,7 +635,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         items: initialItems,
         createdAt: new Date().toISOString(),
         discount: 0, 
-        tax: 18
+        tax: 0
       };
 
       // 4. Update all states in a single batch
@@ -821,7 +863,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         subtotal: details.subtotal || target.subtotal || 0,
         discount_amount: details.discount_amount || target.discount_amount || 0,
         discount_percent: details.discount_percent ?? target.discount_percent ?? target.discount ?? 0,
-        tax_percent: details.tax_percent ?? target.tax_percent ?? 18,
+        tax_percent: details.tax_percent ?? target.tax_percent ?? 0,
         tax_amount: details.tax_amount || target.tax_amount || 0,
         final_total: details.final_total || target.final_total || target.total || 0,
         total: details.final_total || target.total || 0,
@@ -842,11 +884,11 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
 
   const handleCheckout = async () => {
     if (!activeCartId) return;
+    const draft = cartDraftRef.current[activeCartId] || {};
 
     const activeCart = (() => {
       const cart = clientCarts.find((c) => c.id === activeCartId);
       if (!cart) return null;
-      const draft = cartDraftRef.current[activeCartId] || {};
       return {
         ...cart,
         discount: draft.discount ?? cart.discount,
@@ -872,63 +914,90 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     const payload = {
       order_id: activeCartId,
       discount_percent: Number(activeCart.discount) || 0,
-      tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 18,
+      tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 0,
       paid_amount: Number(activeCart.advancePaid) || 0,
+      final_total_override:
+        draft.pricingMode === "finalized" && draft.finalTotalOverride !== undefined
+          ? Number(draft.finalTotalOverride)
+          : null,
       referral_source: activeCart.referralSource || "",
       delivery_address: activeCart.deliveryAddress || "",
       client_phone: activeCart.clientPhone || ""
     };
 
     try {
-      // 3. Send data in the BODY instead of the URL
-      await apiCall(`${API_BASE_URL}/order/finalize-sale`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
+      const effectiveDiscount = Number(activeCart.discount) || 0;
+      const effectiveTax = activeCart.tax !== undefined ? Number(activeCart.tax) : 0;
+      const details = await apiCall(`${API_BASE_URL}/basket/details/${activeCartId}`);
+      const subtotal = Number(details.subtotal) || 0;
+      const { discountAmount, taxAmount, finalTotal } = calculateRoundedBilling(
+        subtotal,
+        effectiveDiscount,
+        effectiveTax
+      );
 
-      const invoiceDetails = await apiCall(`${API_BASE_URL}/basket/details/${activeCartId}`);
       const previewInvoice: ProformaInvoice = {
         id: activeCartId,
         piNumber: activeCartId.slice(0, 8).toUpperCase(),
         clientName: activeCart.clientName,
-        items: (invoiceDetails.order_items || []).map((item: any) => ({
+        items: (details.order_items || []).map((item: any) => ({
           name: item.item_code,
           quantity: item.quantity,
           price: item.unit_price,
           photo_url: item.photo_url,
           attribute_metadata: item.attribute_metadata || [],
         })),
-        discount: Number(activeCart.discount) || 0,
+        discount: effectiveDiscount,
         status: "approved",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        subtotal: invoiceDetails.subtotal || 0,
-        discount_amount: invoiceDetails.discount_amount || 0,
-        discount_percent: invoiceDetails.discount_percent ?? (Number(activeCart.discount) || 0),
-        tax_percent: invoiceDetails.tax_percent ?? (activeCart.tax !== undefined ? Number(activeCart.tax) : 18),
-        tax_amount: invoiceDetails.tax_amount || 0,
-        final_total: invoiceDetails.final_total || 0,
-        total: invoiceDetails.final_total || 0,
+        subtotal,
+        discount_amount: discountAmount,
+        discount_percent: effectiveDiscount,
+        tax_percent: effectiveTax,
+        tax_amount: taxAmount,
+        final_total: finalTotal,
+        total: finalTotal,
         paidAmount: Number(activeCart.advancePaid) || 0,
         clientPhone: activeCart.clientPhone || "",
         referralSource: activeCart.referralSource || "",
         deliveryAddress: activeCart.deliveryAddress || "",
       };
-      await openDocumentPreview(previewInvoice, "INVOICE");
 
-      toast.success(`Sale finalized! Paid: ₹${payload.paid_amount}. Invoice preview opened.`);
-      
-      // Refresh and Reset state
+      setPendingSellContext({ orderId: activeCartId, payload });
+      await openDocumentPreview(previewInvoice, "INVOICE");
+      toast.info("Review invoice and click Confirm Sell to finalize.");
+    } catch (error) {
+      console.error("Checkout preview error:", error);
+    }
+  };
+
+  const handleConfirmSellFromPreview = async () => {
+    if (!pendingSellContext) return;
+    try {
+      setIsConfirmingSell(true);
+      await apiCall(`${API_BASE_URL}/order/finalize-sale`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pendingSellContext.payload),
+      });
+
+      toast.success(`Sale finalized! Paid: ₹${pendingSellContext.payload.paid_amount}.`);
+      setShowPIPreview(false);
+      setPiPreviewData(null);
+      setPendingSellContext(null);
+
       await handleLoadInventory();
+      await handleLoadOrders(true);
       setActiveCartId(null);
-      setClientCarts((prev) => prev.filter((c) => c.id !== activeCartId));
-      delete cartDraftRef.current[activeCartId];
+      setClientCarts((prev) => prev.filter((c) => c.id !== pendingSellContext.orderId));
+      delete cartDraftRef.current[pendingSellContext.orderId];
       setCurrentView("orders");
     } catch (error) {
-      console.error("Checkout error:", error);
+      console.error("Confirm sell error:", error);
+      toast.error("Failed to finalize sale");
+    } finally {
+      setIsConfirmingSell(false);
     }
   };
 
@@ -991,7 +1060,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
   };
 
   const updateCartTax = (cartId: string | null, newTax: number | "") => {
-    const taxValue = newTax === "" ? 18 : newTax; // Default to 18 if empty
+    const taxValue = newTax === "" ? 0 : newTax; // Default to 0 if empty
     if (cartId) {
       cartDraftRef.current[cartId] = {
         ...cartDraftRef.current[cartId],
@@ -1020,6 +1089,24 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     );
   };
 
+  const handlePricingModeChange = (mode: "discount" | "finalized") => {
+    if (!activeCartId) return;
+    cartDraftRef.current[activeCartId] = {
+      ...cartDraftRef.current[activeCartId],
+      pricingMode: mode,
+      finalTotalOverride:
+        mode === "finalized" ? cartDraftRef.current[activeCartId]?.finalTotalOverride : undefined,
+    };
+  };
+
+  const handleFinalizedPriceChange = (value: number | null) => {
+    if (!activeCartId) return;
+    cartDraftRef.current[activeCartId] = {
+      ...cartDraftRef.current[activeCartId],
+      finalTotalOverride: value === null ? undefined : Number(value),
+    };
+  };
+
   // Inside App.tsx
   const proformaInvoices = orders.filter(o => o.status === 'pi'); // Filter orders with 'pi' status
 
@@ -1043,10 +1130,10 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
 
   const handleSaveCart = async () => {
     if (!activeCartId) return;
+    const draft = cartDraftRef.current[activeCartId] || {};
     const activeCart = (() => {
       const cart = clientCarts.find((c) => c.id === activeCartId);
       if (!cart) return null;
-      const draft = cartDraftRef.current[activeCartId] || {};
       return {
         ...cart,
         discount: draft.discount ?? cart.discount,
@@ -1062,8 +1149,12 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
           order_id: activeCartId, 
           status: "bucket", // Keep as active bucket
           discount_percent: Number(activeCart.discount) || 0,
-          tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 18,
+          tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 0,
           paid_amount: activeCart.advancePaid || 0,
+          final_total_override:
+            draft.pricingMode === "finalized" && draft.finalTotalOverride !== undefined
+              ? Number(draft.finalTotalOverride)
+              : null,
           referral_source: activeCart.referralSource || "",
           delivery_address: activeCart.deliveryAddress || "",
           client_phone: activeCart.clientPhone || ""
@@ -1079,10 +1170,10 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
   // 3. Updated Generate PI (Save + Convert + Trigger Download)
   const handleGeneratePI = async () => {
     if (!activeCartId) return;
+    const draft = cartDraftRef.current[activeCartId] || {};
     const activeCart = (() => {
       const cart = clientCarts.find((c) => c.id === activeCartId);
       if (!cart) return null;
-      const draft = cartDraftRef.current[activeCartId] || {};
       return {
         ...cart,
         discount: draft.discount ?? cart.discount,
@@ -1093,31 +1184,31 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     const cartIdToConvert = activeCartId;
     
     try {
-      // A. Persist PI status and latest metadata using existing endpoint
-      await apiCall(`${API_BASE_URL}/order/update-status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          order_id: cartIdToConvert, 
-          status: "pi",
-          discount_percent: Number(activeCart.discount) || 0,
-          tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 18,
-          paid_amount: activeCart.advancePaid || 0,
-          referral_source: activeCart.referralSource || "",
-          delivery_address: activeCart.deliveryAddress || "",
-          client_phone: activeCart.clientPhone || ""
-        }),
-      });
+      const piPayload = {
+        order_id: cartIdToConvert,
+        status: "pi",
+        discount_percent: Number(activeCart.discount) || 0,
+        tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 0,
+        paid_amount: activeCart.advancePaid || 0,
+        final_total_override:
+          draft.pricingMode === "finalized" && draft.finalTotalOverride !== undefined
+            ? Number(draft.finalTotalOverride)
+            : null,
+        referral_source: activeCart.referralSource || "",
+        delivery_address: activeCart.deliveryAddress || "",
+        client_phone: activeCart.clientPhone || ""
+      };
 
-      // B. Fetch latest PI data and build the exact same document payload used earlier
+      // Preview first; do not persist PI yet
       const piDetails = await apiCall(`${API_BASE_URL}/basket/details/${cartIdToConvert}`);
       const effectiveDiscount = Number(activeCart.discount) || 0;
-      const effectiveTax = activeCart.tax !== undefined ? Number(activeCart.tax) : 18;
+      const effectiveTax = activeCart.tax !== undefined ? Number(activeCart.tax) : 0;
       const subtotal = Number(piDetails.subtotal) || 0;
-      const discountAmount = subtotal * (effectiveDiscount / 100);
-      const taxableAmount = subtotal - discountAmount;
-      const taxAmount = taxableAmount * (effectiveTax / 100);
-      const finalTotal = taxableAmount + taxAmount;
+      const { discountAmount, taxAmount, finalTotal } = calculateRoundedBilling(
+        subtotal,
+        effectiveDiscount,
+        effectiveTax
+      );
       const previewPI: ProformaInvoice = {
         id: cartIdToConvert,
         piNumber: cartIdToConvert.slice(0, 8).toUpperCase(),
@@ -1146,18 +1237,39 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         deliveryAddress: activeCart.deliveryAddress || "",
       };
 
+      setPendingPIContext({ orderId: cartIdToConvert, payload: piPayload });
       await openDocumentPreview(previewPI, "PI");
-
-      // C. Sync PI list and clean up cart state
-      await fetchOrderItems(cartIdToConvert);
-      await handleLoadProformaInvoices();
-      setClientCarts((prev) => prev.filter((c) => c.id !== cartIdToConvert));
-      setActiveCartId(null);
-      delete cartDraftRef.current[cartIdToConvert];
-      setAutoDownloadPIId(null); 
-      toast.success("PI generated. Preview opened.");
+      toast.info("Review PI and click Confirm PI to generate.");
     } catch (error) {
       toast.error("Failed to generate PI");
+    }
+  };
+
+  const handleConfirmPIFromPreview = async () => {
+    if (!pendingPIContext) return;
+    try {
+      setIsConfirmingPI(true);
+      await apiCall(`${API_BASE_URL}/order/update-status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pendingPIContext.payload),
+      });
+
+      await fetchOrderItems(pendingPIContext.orderId);
+      await handleLoadProformaInvoices();
+      setClientCarts((prev) => prev.filter((c) => c.id !== pendingPIContext.orderId));
+      setActiveCartId(null);
+      delete cartDraftRef.current[pendingPIContext.orderId];
+      setAutoDownloadPIId(null);
+      setShowPIPreview(false);
+      setPiPreviewData(null);
+      setPendingPIContext(null);
+      toast.success("PI generated.");
+    } catch (error) {
+      console.error("Confirm PI error:", error);
+      toast.error("Failed to generate PI");
+    } finally {
+      setIsConfirmingPI(false);
     }
   };
   
@@ -1182,12 +1294,23 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         clientName: pi.clientName,
         items: freshItems,
         discount: data.discount_percent ?? 0,
-        tax: data.tax_percent ?? 18,
+        tax: data.tax_percent ?? 0,
         advancePaid: data.paid_amount || 0,
         referralSource: data.referral_source || "",
         deliveryAddress: data.delivery_address || "",
         clientPhone: data.client_phone || "",
         createdAt: pi.createdAt,
+      };
+
+      cartDraftRef.current[pi.id] = {
+        ...cartDraftRef.current[pi.id],
+        discount: Number(data.discount_percent ?? 0),
+        tax: Number(data.tax_percent ?? 0),
+        pricingMode: "finalized",
+        finalTotalOverride:
+          data.final_total !== undefined && data.final_total !== null
+            ? Number(data.final_total)
+            : undefined,
       };
 
       setClientCarts((prev) => {
@@ -1213,6 +1336,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       // Derive current stock at runtime from the master product list
       stock: masterProduct ? (masterProduct.displayStock + masterProduct.godownStock) : 0
     };}) || [];
+  const activeCartDraft = activeCartId ? cartDraftRef.current[activeCartId] : undefined;
 
   const getTotalCartCount = () => {
     return clientCarts.reduce(
@@ -1244,7 +1368,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       });
 
       // Re-fetch orders to update the 'Paid' and 'Balance' columns
-      await handleLoadOrders(); 
+      await handleLoadOrders(true); 
       toast.success(`Payment of ₹${amount} recorded successfully!`);
     } catch (error) {
       console.error("Payment failed:", error);
@@ -1581,7 +1705,22 @@ return (
             )}
 
             {currentView === "inventory" && (
-              <Inventory products={products as unknown as ExtendedProduct[]} onUpdateInventory={handleUpdateInventory} onBulkAdd={handleBulkAdd} />
+              <Inventory
+                products={products as unknown as ExtendedProduct[]}
+                onUpdateInventory={handleUpdateInventory}
+                onBulkAdd={handleBulkAdd}
+                onAddToCartFromInventory={async (product, quantity, room) => {
+                  await handleAddToCart(product as unknown as Product, quantity, room);
+                }}
+                activeCartId={activeCartId}
+                activeCartLabel={activeCart?.clientName || null}
+                onRequireActiveCart={() => {
+                  setPendingProduct(null);
+                  setPendingQuantity(1);
+                  setPendingAttribute("None");
+                  setShowClientDialog(true);
+                }}
+              />
             )}
 
             {currentView === "orders" && (
@@ -1590,6 +1729,7 @@ return (
                 onFetchDetails={fetchOrderItems}
                 onRecordPayment={handleRecordPayment}
                 onDownloadInvoice={handleDownloadInvoice}
+                summary={orderSummary}
               />
             )}
 
@@ -1620,6 +1760,10 @@ return (
                   onUpdateAddress={(val) => handleUpdateCartMetadata('deliveryAddress', val)}
                   onUpdatePhone={(val) => handleUpdateCartMetadata('clientPhone', val)}
                   onUpdateReferral={(val) => handleUpdateCartMetadata('referralSource', val)}
+                  onPricingModeChange={handlePricingModeChange}
+                  onFinalizedPriceChange={handleFinalizedPriceChange}
+                  pricingModeDraft={activeCartDraft?.pricingMode}
+                  finalTotalOverrideDraft={activeCartDraft?.finalTotalOverride}
                 />
               </div>
             )}
@@ -1668,6 +1812,8 @@ return (
           setShowPIPreview(open);
           if (!open) {
             setPiPreviewData(null);
+            setPendingSellContext(null);
+            setPendingPIContext(null);
           }
         }}
       >
@@ -1687,9 +1833,29 @@ return (
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowPIPreview(false)}>
-              Close
-            </Button>
+            {previewDocType === "INVOICE" && pendingSellContext ? (
+              <>
+                <Button variant="outline" onClick={() => setShowPIPreview(false)} disabled={isConfirmingSell}>
+                  Cancel
+                </Button>
+                <Button onClick={handleConfirmSellFromPreview} disabled={isConfirmingSell}>
+                  {isConfirmingSell ? "Confirming..." : "Confirm Sell"}
+                </Button>
+              </>
+            ) : previewDocType === "PI" && pendingPIContext ? (
+              <>
+                <Button variant="outline" onClick={() => setShowPIPreview(false)} disabled={isConfirmingPI}>
+                  Cancel
+                </Button>
+                <Button onClick={handleConfirmPIFromPreview} disabled={isConfirmingPI}>
+                  {isConfirmingPI ? "Confirming..." : "Confirm PI"}
+                </Button>
+              </>
+            ) : (
+              <Button variant="outline" onClick={() => setShowPIPreview(false)}>
+                Close
+              </Button>
+            )}
             {piPreviewUrl && (
               <Button
                 onClick={() => window.open(piPreviewUrl, "_blank", "noopener,noreferrer")}

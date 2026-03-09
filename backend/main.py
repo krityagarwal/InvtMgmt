@@ -13,6 +13,7 @@ import urllib.parse
 import mimetypes
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import logging
+import math
 from config import get_db_conn
 from datetime import datetime
 from typing import Dict, Any
@@ -284,7 +285,7 @@ async def create_basket(req: BasketCreate):
                         client_phone, referral_source, delivery_address,
                         discount_percent, tax_percent
                     ) 
-                    VALUES (%s, %s, 'bucket', %s, %s, %s, %s, 0, 18) RETURNING id
+                    VALUES (%s, %s, 'bucket', %s, %s, %s, %s, 0, 0) RETURNING id
                 """, (
                     req.shop_id, 
                     client_id, 
@@ -425,6 +426,7 @@ class FinalizeOrderRequest(BaseModel):
     discount_percent: float
     tax_percent: float
     paid_amount: float
+    final_total_override: Optional[float] = None
     referral_source: str = ""
     delivery_address: str = ""
     client_phone: str = ""
@@ -481,7 +483,7 @@ async def finalize_order(req: FinalizeOrderRequest): # Now accepts the full obje
 
             # Keep SELL totals aligned with PI flow by recalculating persisted amounts
             # (subtotal, discount_amount, tax_amount, final_total) after % updates.
-            update_order_total(cur, req.order_id)
+            update_order_total(cur, req.order_id, req.final_total_override)
             
             conn.commit()
             
@@ -571,7 +573,7 @@ async def get_basket_details(order_id: str):
                     "status": order_data['status'],
                     "discount_percent": order_data['discount_percent'] if order_data['discount_percent'] is not None else 0,
                     "discount_amount": float(order_data['discount_amount']) if order_data['discount_amount'] is not None else 0.0,
-                    "tax_percent": order_data['tax_percent'] if order_data['tax_percent'] is not None else 18,
+                    "tax_percent": order_data['tax_percent'] if order_data['tax_percent'] is not None else 0,
                     "tax_amount": float(order_data['tax_amount']) if order_data['tax_amount'] is not None else 0.0,
                     "subtotal": float(order_data['subtotal']) if order_data['subtotal'] is not None else 0.0,
                     "final_total": float(order_data['final_total']) if order_data['final_total'] is not None else 0.0,
@@ -608,6 +610,65 @@ async def list_orders(shop_id: str, status: str = None):
                 return cur.fetchall()
     except Exception as e:
         logger.error(f"Error listing orders: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/orders/summary/{shop_id}")
+async def orders_summary(shop_id: str):
+    """
+    Financial summary for Orders dashboard.
+    Uses SOLD orders as realized revenue base.
+    """
+    query = """
+        WITH filtered_orders AS (
+            SELECT id, final_total, paid_amount, subtotal, discount_amount
+            FROM orders
+            WHERE shop_id = %s
+        ),
+        order_totals AS (
+            SELECT
+                COALESCE(SUM(final_total), 0) AS total_revenue,
+                COALESCE(SUM(paid_amount), 0) AS total_received,
+                COALESCE(SUM(GREATEST(final_total - COALESCE(paid_amount, 0), 0)), 0) AS total_due
+            FROM filtered_orders
+        ),
+        profit_totals AS (
+            SELECT
+                COALESCE(SUM(
+                    (COALESCE(o.subtotal, 0) - COALESCE(o.discount_amount, 0))
+                    - COALESCE(cogs.landing_total, 0)
+                ), 0) AS estimated_profit
+            FROM filtered_orders o
+            LEFT JOIN (
+                SELECT
+                    oi.order_id,
+                    COALESCE(SUM(oi.quantity * COALESCE(p.overhead_expense, 0)), 0) AS landing_total
+                FROM order_items oi
+                LEFT JOIN products p ON p.id = oi.product_id
+                GROUP BY oi.order_id
+            ) cogs ON cogs.order_id = o.id
+        )
+        SELECT
+            ot.total_revenue,
+            ot.total_received,
+            ot.total_due,
+            pt.estimated_profit
+        FROM order_totals ot
+        CROSS JOIN profit_totals pt
+    """
+    try:
+        with get_db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (shop_id,))
+                res = cur.fetchone() or {}
+                return {
+                    "total_revenue": float(res.get("total_revenue") or 0),
+                    "total_received": float(res.get("total_received") or 0),
+                    "total_due": float(res.get("total_due") or 0),
+                    "estimated_profit": float(res.get("estimated_profit") or 0),
+                }
+    except Exception as e:
+        logger.error(f"Error fetching order summary: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 class QtyUpdate(BaseModel):
@@ -671,7 +732,7 @@ async def remove_order_item(order_id: str, product_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) 
 
-def update_order_total(cur, order_id):
+def update_order_total(cur, order_id, final_total_override: Optional[float] = None):
     """Recalculates and persists the subtotal, discount, tax, and final total."""
     # 1. Calculate the raw subtotal from items
     cur.execute("SELECT SUM(total_price) as subtotal FROM order_items WHERE order_id = %s", (order_id,))
@@ -685,28 +746,53 @@ def update_order_total(cur, order_id):
     discount_percent = float(order_res['discount_percent']) if order_res else 0.0
     tax_percent = float(order_res['tax_percent']) if order_res else 0.0
     
-    # 3. Step-by-Step Mathematical Calculation
-    # Calculate Discount Amount
-    discount_amount = subtotal * (discount_percent / 100.0)
-    
-    # Taxable Amount is Subtotal minus Discount
-    taxable_amount = subtotal - discount_amount
-    
-    # Calculate Tax on the discounted amount
-    tax_amount = taxable_amount * (tax_percent / 100.0)
-    
-    # Final Total
-    final_total = taxable_amount + tax_amount
+    final_discount_percent = discount_percent
+    subtotal_int = max(0, int(round(subtotal)))
+
+    if final_total_override is not None:
+        target_final = max(0, int(round(float(final_total_override))))
+        best_discount_amount = 0
+        min_diff = float("inf")
+
+        for discount_amt in range(0, subtotal_int + 1):
+            taxable_int = subtotal_int - discount_amt
+            tax_int = int(math.ceil(taxable_int * (tax_percent / 100.0)))
+            computed_final = taxable_int + tax_int
+            diff = abs(computed_final - target_final)
+
+            if diff < min_diff or (diff == min_diff and discount_amt > best_discount_amount):
+                min_diff = diff
+                best_discount_amount = discount_amt
+            if diff == 0:
+                break
+
+        discount_amount = float(best_discount_amount)
+        taxable_amount = float(max(0, subtotal_int - best_discount_amount))
+        tax_amount = float(int(math.ceil(taxable_amount * (tax_percent / 100.0))))
+        final_total = taxable_amount + tax_amount
+        final_discount_percent = (discount_amount * 100.0 / subtotal) if subtotal > 0 else 0.0
+    else:
+        # Default whole-rupee policy:
+        # - discount_amount: floor (avoid over-discounting)
+        # - tax_amount: ceil (avoid under-collecting tax)
+        raw_discount = subtotal * (discount_percent / 100.0)
+        discount_amount = float(math.floor(raw_discount))
+
+        taxable_amount = max(0.0, subtotal - discount_amount)
+        raw_tax = taxable_amount * (tax_percent / 100.0)
+        tax_amount = float(math.ceil(raw_tax))
+        final_total = taxable_amount + tax_amount
     
     # 4. Persist all values to the orders table
     cur.execute("""
         UPDATE orders 
         SET subtotal = %s, 
+            discount_percent = %s,
             discount_amount = %s, 
             tax_amount = %s, 
             final_total = %s 
         WHERE id = %s
-    """, (subtotal, discount_amount, tax_amount, final_total, order_id))
+    """, (subtotal, final_discount_percent, discount_amount, tax_amount, final_total, order_id))
 
 @app.delete("/order/delete/{order_id}")
 async def delete_order(order_id: str):
@@ -826,8 +912,9 @@ class StatusUpdateRequest(BaseModel):
     order_id: str
     status: str
     discount_percent: Optional[float] = 0.0
-    tax_percent: Optional[float] = 18.0
+    tax_percent: Optional[float] = 0.0
     paid_amount: float = 0.0
+    final_total_override: Optional[float] = None
     referral_source: str = ""   
     delivery_address: str = "" 
     client_phone: str = ""     
@@ -853,7 +940,7 @@ async def update_order_status(request: StatusUpdateRequest):
             WHERE id = %s
         """, (request.status, request.discount_percent, request.tax_percent, request.paid_amount, request.referral_source, request.delivery_address, request.client_phone, request.order_id))
 
-        update_order_total(cur, request.order_id)
+        update_order_total(cur, request.order_id, request.final_total_override)
         
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Order not found")

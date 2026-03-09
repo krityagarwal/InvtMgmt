@@ -365,6 +365,7 @@
 //   );
 // }
 
+import { useEffect, useState } from "react";
 import { ShoppingCart, Trash2, Plus, Minus, CreditCard, User, Percent, Save, FileDown, Phone, MapPin, Users } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -399,6 +400,10 @@ interface CartProps {
   onUpdateAddress: (address: string) => void;
   onUpdatePhone: (phone: string) => void;
   onUpdateReferral: (referral: string) => void;
+  onPricingModeChange?: (mode: "discount" | "finalized") => void;
+  onFinalizedPriceChange?: (value: number | null) => void;
+  pricingModeDraft?: "discount" | "finalized";
+  finalTotalOverrideDraft?: number;
 }
 
 export function Cart({
@@ -406,12 +411,95 @@ export function Cart({
   onUpdateQuantity, onRemoveItem, onUpdateDiscount, onCheckout,
   onGeneratePI, onSaveCart, updateCartTax, onUpdateAdvance,
   onUpdateAddress, onUpdatePhone, onUpdateReferral,
+  onPricingModeChange, onFinalizedPriceChange,
+  pricingModeDraft, finalTotalOverrideDraft,
 }: CartProps) {
   const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const [pricingMode, setPricingMode] = useState<"discount" | "finalized">("discount");
+  const [finalizedPriceInput, setFinalizedPriceInput] = useState<number | "">("");
+  const [isFullPaid, setIsFullPaid] = useState(false);
+  const taxPercent = Number(activeCart?.tax ?? 0);
   const numericDiscount = Number(discount) || 0;
-  const discountAmount = subtotal * (numericDiscount / 100);
-  const tax = (subtotal - discountAmount) * ((activeCart?.tax ?? 18) / 100);
-  const total = subtotal - discountAmount + tax;
+  const discountAmount = Math.floor(subtotal * (numericDiscount / 100));
+  const taxableAmount = Math.max(0, subtotal - discountAmount);
+  const tax = Math.ceil(taxableAmount * (taxPercent / 100));
+  const negotiatedTotal = taxableAmount + tax;
+  const finalizedAmount =
+    pricingMode === "discount"
+      ? negotiatedTotal
+      : (finalizedPriceInput === "" ? negotiatedTotal : Number(finalizedPriceInput));
+  const displayTotal =
+    pricingMode === "finalized" && finalizedPriceInput !== ""
+      ? Number(finalizedPriceInput)
+      : negotiatedTotal;
+
+  const calculateDiscountFromFinalized = (targetFinal: number, baseSubtotal: number, currentTaxPercent: number) => {
+    const subtotalInt = Math.max(0, Math.round(baseSubtotal));
+    const targetInt = Math.max(0, Math.round(targetFinal));
+    if (subtotalInt <= 0) return 0;
+
+    let bestDiscountAmount = 0;
+    let minDiff = Number.POSITIVE_INFINITY;
+
+    for (let discountAmt = 0; discountAmt <= subtotalInt; discountAmt += 1) {
+      const taxable = subtotalInt - discountAmt;
+      const taxAmt = Math.ceil(taxable * (currentTaxPercent / 100));
+      const computedFinal = taxable + taxAmt;
+      const diff = Math.abs(computedFinal - targetInt);
+
+      if (diff < minDiff || (diff === minDiff && discountAmt > bestDiscountAmount)) {
+        minDiff = diff;
+        bestDiscountAmount = discountAmt;
+      }
+      if (diff === 0) break;
+    }
+
+    const percent = (bestDiscountAmount * 100) / subtotalInt;
+    return Math.min(100, Math.max(0, Number(percent.toFixed(6))));
+  };
+
+  useEffect(() => {
+    if (pricingMode !== "finalized") return;
+    if (finalizedPriceInput === "") return;
+    const finalizedPrice = Number(finalizedPriceInput) || 0;
+    const nextDiscount = calculateDiscountFromFinalized(finalizedPrice, subtotal, taxPercent);
+    if (Math.abs(nextDiscount - numericDiscount) > 0.01) {
+      onUpdateDiscount(nextDiscount);
+    }
+  }, [pricingMode, finalizedPriceInput, subtotal, taxPercent, numericDiscount]);
+
+  useEffect(() => {
+    onPricingModeChange?.(pricingMode);
+  }, [pricingMode, onPricingModeChange]);
+
+  useEffect(() => {
+    if (pricingMode !== "finalized" || finalizedPriceInput === "") {
+      onFinalizedPriceChange?.(null);
+      return;
+    }
+    onFinalizedPriceChange?.(Number(finalizedPriceInput));
+  }, [pricingMode, finalizedPriceInput, onFinalizedPriceChange]);
+
+  useEffect(() => {
+    if (!activeCartId) return;
+    const nextMode = pricingModeDraft ?? "discount";
+    setPricingMode(nextMode);
+    if (nextMode === "finalized" && finalTotalOverrideDraft !== undefined) {
+      setFinalizedPriceInput(Number(finalTotalOverrideDraft));
+    } else {
+      setFinalizedPriceInput(Number(negotiatedTotal.toFixed(2)));
+    }
+    setIsFullPaid(false);
+  }, [activeCartId, pricingModeDraft, finalTotalOverrideDraft, negotiatedTotal]);
+
+  useEffect(() => {
+    if (!isFullPaid) return;
+    const nextAdvance = Number(finalizedAmount.toFixed(2));
+    const currentAdvance = Number(activeCart?.advancePaid || 0);
+    if (Math.abs(nextAdvance - currentAdvance) > 0.01) {
+      onUpdateAdvance(nextAdvance);
+    }
+  }, [isFullPaid, finalizedAmount, activeCart?.advancePaid]);
 
   const hasOverstockItems = items.some((item) => {
     const master = products.find((p) => p.id === item.id);
@@ -481,36 +569,49 @@ export function Cart({
           const isOverStock = item.quantity > available;
 
           return (
-            <div key={item.id} className="flex items-center gap-3 px-3 py-2.5">
-              <div className="flex-1 min-w-0">
-                <p className="font-bold text-xs uppercase truncate text-gray-800">{item.name}</p>
-                <div className="flex flex-wrap gap-0.5 mt-0.5">
-                  {item.attribute_metadata?.map((attr, idx) => (
-                    <span key={idx} className="bg-blue-50 text-blue-700 text-[8px] px-1 py-0.5 rounded border border-blue-100">
-                      {attr.label}: {attr.qty}
-                    </span>
-                  ))}
-                </div>
-                {isOverStock && <p className="text-[9px] font-bold text-red-500 mt-1 italic uppercase">Low Stock ({available})</p>}
-              </div>
-
-              <div className="flex items-center gap-1 bg-gray-50 border rounded-md p-0.5">
-                <Button variant="ghost" size="icon" className="size-6" onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}>
-                  <Minus className="size-2.5" />
-                </Button>
-                <span className="w-5 text-center text-[11px] font-black">{item.quantity}</span>
-                <Button variant="ghost" size="icon" className="size-6" onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}>
-                  <Plus className="size-2.5" />
-                </Button>
-              </div>
-
-              <div className="text-right min-w-[70px]">
-                <p className="font-black text-xs text-gray-900 font-mono">₹{(item.price * item.quantity).toLocaleString()}</p>
-              </div>
-
-              <Button variant="ghost" size="icon" className="size-7 hover:bg-red-50" onClick={() => onRemoveItem(item.id)}>
-                <Trash2 className="size-3.5 text-gray-300 hover:text-red-500" />
+            <div key={item.id} className="px-3 py-2.5 relative">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-6 hover:bg-red-50 absolute top-2 right-0"
+                onClick={() => onRemoveItem(item.id)}
+              >
+                <Trash2 className="size-3 text-gray-300 hover:text-red-500" />
               </Button>
+
+              <div className="grid grid-cols-[1.35fr_0.95fr_auto_1fr] items-center gap-2 pr-7">
+                <div className="min-w-0">
+                  <p className="font-bold text-xs uppercase truncate text-gray-800">{item.name}</p>
+                </div>
+                <div className="text-[10px] text-slate-500 font-medium whitespace-nowrap">
+                  ₹{item.price.toLocaleString()} / unit
+                </div>
+                <div className="flex items-center gap-0.5 bg-white border rounded p-0.5 justify-self-start">
+                  <Button variant="ghost" size="icon" className="size-5" onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}>
+                    <Minus className="size-2.5" />
+                  </Button>
+                  <span className="w-5 text-center text-[11px] font-black">{item.quantity}</span>
+                  <Button variant="ghost" size="icon" className="size-5" onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}>
+                    <Plus className="size-2.5" />
+                  </Button>
+                </div>
+                <div className="text-right font-black text-xs text-gray-900 font-mono min-w-[68px]">
+                  ₹{(item.price * item.quantity).toLocaleString()}
+                </div>
+              </div>
+
+              {(item.attribute_metadata?.length || isOverStock) ? (
+                <div className="mt-1.5 flex items-center justify-between gap-2">
+                  <div className="flex flex-wrap gap-0.5">
+                    {item.attribute_metadata?.map((attr, idx) => (
+                      <span key={idx} className="bg-blue-50 text-blue-700 text-[8px] px-1 py-0.5 rounded border border-blue-100">
+                        {attr.label}: {attr.qty}
+                      </span>
+                    ))}
+                  </div>
+                  {isOverStock && <p className="text-[9px] font-bold text-red-500 italic uppercase whitespace-nowrap">Low Stock ({available})</p>}
+                </div>
+              ) : null}
             </div>
           );
         })}
@@ -525,18 +626,40 @@ export function Cart({
 
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Discount</span>
-            <input
-              type="number" 
-              value={discount || ""} 
-              placeholder="0"
-              onChange={(e) => onUpdateDiscount(parseFloat(e.target.value) || 0)}
-              onFocus={(e) => e.currentTarget.select()}
-              className="w-12 h-6 text-[11px] text-center font-bold border border-slate-200 rounded bg-white outline-none focus:border-blue-400 transition-colors"
-            />
-            <span className="text-[11px] font-bold text-slate-400">%</span>
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Pricing Mode</span>
           </div>
-          <span className="font-bold text-red-500 font-mono text-[11px]">-₹{discountAmount.toLocaleString()}</span>
+          <div className="inline-flex rounded-md border border-slate-300 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => {
+                setPricingMode("discount");
+                setFinalizedPriceInput("");
+                onUpdateDiscount(0);
+                setIsFullPaid(false);
+                onUpdateAdvance(0);
+              }}
+              className={`px-2 py-1 text-[10px] font-bold uppercase ${
+                pricingMode === "discount" ? "bg-blue-600 text-white" : "bg-white text-slate-600"
+              }`}
+            >
+              Enter Discount %
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPricingMode("finalized");
+                setFinalizedPriceInput("");
+                onUpdateDiscount(0);
+                setIsFullPaid(false);
+                onUpdateAdvance(0);
+              }}
+              className={`px-2 py-1 text-[10px] font-bold uppercase ${
+                pricingMode === "finalized" ? "bg-blue-600 text-white" : "bg-white text-slate-600"
+              }`}
+            >
+              Enter Final Price
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center justify-between">
@@ -544,8 +667,16 @@ export function Cart({
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Tax</span>
             <input
               type="number" 
-              value={activeCart?.tax ?? 18}
-              onChange={(e) => updateCartTax(activeCartId, Number(e.target.value))}
+              value={taxPercent}
+              onChange={(e) => {
+                const nextTax = Number(e.target.value);
+                updateCartTax(activeCartId, nextTax);
+                setIsFullPaid(false);
+                onUpdateAdvance(0);
+                if (pricingMode === "finalized" && finalizedPriceInput !== "") {
+                  onUpdateDiscount(calculateDiscountFromFinalized(Number(finalizedPriceInput) || 0, subtotal, nextTax));
+                }
+              }}
               onFocus={(e) => e.currentTarget.select()}
               className="w-12 h-6 text-[11px] text-center font-bold border border-slate-200 rounded bg-white outline-none focus:border-blue-400 transition-colors"
             />
@@ -554,19 +685,93 @@ export function Cart({
           <span className="font-bold text-slate-600 font-mono text-[11px]">₹{tax.toLocaleString()}</span>
         </div>
 
+        {pricingMode === "discount" ? (
+          <div className="flex items-center justify-between bg-white rounded-lg px-2 py-1.5 border border-slate-200">
+            <div className="leading-tight">
+              <p className="text-[9px] font-black text-slate-700 uppercase">Discount %</p>
+            </div>
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                value={discount || ""}
+                placeholder="0"
+                onChange={(e) => {
+                  setIsFullPaid(false);
+                  onUpdateAdvance(0);
+                  onUpdateDiscount(parseFloat(e.target.value) || 0);
+                }}
+                onFocus={(e) => e.currentTarget.select()}
+                className="w-20 h-7 text-right text-xs font-black border border-slate-300 rounded bg-white outline-none focus:border-blue-400"
+              />
+              <span className="text-[11px] font-bold text-slate-400">%</span>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between bg-white rounded-lg px-2 py-1.5 border border-slate-200">
+            <div className="leading-tight">
+              <p className="text-[9px] font-black text-slate-700 uppercase">Final Negotiated Price</p>
+            </div>
+            <Input
+              type="number"
+              value={finalizedPriceInput}
+              placeholder="Finalized"
+              className="w-24 h-7 text-right font-black text-xs bg-white border-slate-300"
+              onFocus={(e) => e.currentTarget.select()}
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === "") {
+                  setFinalizedPriceInput("");
+                  setIsFullPaid(false);
+                  onUpdateAdvance(0);
+                  return;
+                }
+                setIsFullPaid(false);
+                onUpdateAdvance(0);
+                setFinalizedPriceInput(parseFloat(raw) || 0);
+              }}
+            />
+          </div>
+        )}
+
+        <div className="flex justify-between items-center text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
+          <span className="font-bold uppercase tracking-wide">Savings</span>
+          <span className="font-bold font-mono">₹{discountAmount.toLocaleString()} ({numericDiscount.toFixed(2)}%)</span>
+        </div>
+
         <div className="pt-2 border-t-2 border-dashed flex justify-between items-center">
           <span className="text-xs font-black uppercase text-gray-400">Total</span>
-          <span className="text-xl font-black text-blue-700 font-mono tracking-tighter">₹{total.toLocaleString()}</span>
+          <span className="text-xl font-black text-blue-700 font-mono tracking-tighter">₹{displayTotal.toLocaleString()}</span>
         </div>
 
         <div className="flex items-center justify-between bg-blue-600/5 rounded-lg px-2 py-1.5 border border-blue-100">
           <div className="leading-tight">
-            <p className="text-[9px] font-black text-blue-800 uppercase">Advance</p>
-            <p className="text-[10px] font-bold text-red-600 font-mono italic">Bal: ₹{(total - (activeCart?.advancePaid || 0)).toLocaleString()}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-[9px] font-black text-blue-800 uppercase">Advance</p>
+              <label className="flex items-center gap-1 text-[9px] text-blue-700 font-bold uppercase">
+                <input
+                  type="checkbox"
+                  checked={isFullPaid}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setIsFullPaid(checked);
+                    if (checked) {
+                      onUpdateAdvance(Number(finalizedAmount.toFixed(2)));
+                    }
+                  }}
+                  className="h-3 w-3 accent-blue-600"
+                />
+                Full Paid
+              </label>
+            </div>
+            <p className="text-[10px] font-bold text-red-600 font-mono italic">
+              Bal: ₹{(finalizedAmount - (activeCart?.advancePaid || 0)).toLocaleString()}
+            </p>
           </div>
           <Input
             type="number" value={activeCart?.advancePaid || ""}
-            className="w-24 h-7 text-right font-black text-xs bg-white border-blue-200"
+            className={`w-24 h-7 text-right font-black text-xs border-blue-200 ${isFullPaid ? "bg-slate-100 text-slate-500" : "bg-white"}`}
+            disabled={isFullPaid}
+            onFocus={(e) => e.currentTarget.select()}
             onChange={(e) => onUpdateAdvance(parseFloat(e.target.value) || 0)}
           />
         </div>

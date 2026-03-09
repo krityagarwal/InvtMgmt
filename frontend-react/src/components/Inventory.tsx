@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react";
-import { Package, Search, AlertTriangle, Printer, LayoutDashboard, Edit2, Plus, Trash2, ArrowUpDown } from "lucide-react";
+import { Package, Search, AlertTriangle, Printer, LayoutDashboard, Edit2, Plus, Trash2, ArrowUpDown, ShoppingCart, Minus } from "lucide-react";
 import { Input } from "./ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -21,6 +21,7 @@ import { Dialog, DialogContent,
   DialogHeader,
   DialogTitle,
   DialogFooter, } from "./ui/dialog";
+import { toast } from "sonner";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -35,7 +36,11 @@ export interface ExtendedProduct extends Product {
 interface InventoryProps {
   products: ExtendedProduct[];
   onUpdateInventory: (updatedProduct: any) => Promise<void>;
-  onBulkAdd: (newItems: any[]) => Promise<void>; 
+  onBulkAdd: (newItems: any[]) => Promise<void>;
+  onAddToCartFromInventory?: (product: ExtendedProduct, quantity: number, room: string) => Promise<void>;
+  activeCartId?: string | null;
+  activeCartLabel?: string | null;
+  onRequireActiveCart?: () => void;
 }
 
 interface CategoryOption {
@@ -43,7 +48,15 @@ interface CategoryOption {
   name: string;
 }
 
-export function Inventory({ products, onUpdateInventory, onBulkAdd}: InventoryProps) {
+export function Inventory({
+  products,
+  onUpdateInventory,
+  onBulkAdd,
+  onAddToCartFromInventory,
+  activeCartId,
+  activeCartLabel,
+  onRequireActiveCart,
+}: InventoryProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [printSelection, setPrintSelection] = useState<{ [key: string]: number }>({});
@@ -187,6 +200,9 @@ React.useEffect(() => {
   const [editBuffer, setEditBuffer] = useState<any>(null);
 
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [isAddToCartModalOpen, setIsAddToCartModalOpen] = useState(false);
+  const [cartDrafts, setCartDrafts] = useState<Record<string, { qty: number; room: string }>>({});
+  const roomOptions = ["None", "Living Room", "Bedroom", "Kitchen", "Dining", "Outdoor"];
   // When initializing or adding a row, give it a random ID
   const [bulkRows, setBulkRows] = useState<any[]>([
     { id: crypto.randomUUID(), item_code: "" }
@@ -348,6 +364,84 @@ const handlePrintLabels = () => {
     }]);
   };
 
+  const selectedProductsForCart = React.useMemo(
+    () => sortedProducts.filter((p) => !!printSelection[p.id]),
+    [sortedProducts, printSelection]
+  );
+
+  const openAddToCartModal = () => {
+    if (!activeCartId) {
+      onRequireActiveCart?.();
+      toast.info("Create or select a cart to continue.");
+      return;
+    }
+    if (selectedProductsForCart.length === 0) {
+      toast.error("Select at least one item.");
+      return;
+    }
+
+    const seed: Record<string, { qty: number; room: string }> = {};
+    selectedProductsForCart.forEach((p) => {
+      seed[p.id] = {
+        qty: cartDrafts[p.id]?.qty ?? 1,
+        room: cartDrafts[p.id]?.room ?? "None",
+      };
+    });
+    setCartDrafts(seed);
+    setIsAddToCartModalOpen(true);
+  };
+
+  const updateCartDraft = (productId: string, patch: Partial<{ qty: number; room: string }>) => {
+    setCartDrafts((prev) => ({
+      ...prev,
+      [productId]: {
+        qty: prev[productId]?.qty ?? 1,
+        room: prev[productId]?.room ?? "None",
+        ...patch,
+      },
+    }));
+  };
+
+  const handleConfirmAddToCart = async () => {
+    if (!onAddToCartFromInventory) return;
+    const lines = selectedProductsForCart
+      .map((p) => ({ product: p, draft: cartDrafts[p.id] || { qty: 1, room: "None" } }))
+      .filter((row) => row.draft.qty > 0);
+
+    if (lines.length === 0) {
+      toast.error("Please enter quantity greater than 0.");
+      return;
+    }
+
+    const stockError = lines.find(({ product, draft }) => draft.qty > (product.displayStock + product.godownStock));
+    if (stockError) {
+      toast.error(`Qty exceeds stock for ${stockError.product.barcode}.`);
+      return;
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+    for (const row of lines) {
+      try {
+        await onAddToCartFromInventory(row.product, row.draft.qty, row.draft.room);
+        successCount += 1;
+      } catch {
+        failCount += 1;
+      }
+    }
+
+    if (successCount > 0) {
+      toast.success(`Added ${successCount} item line(s) to ${activeCartLabel || "active cart"}.`);
+      setPrintSelection({});
+    }
+    if (failCount > 0) {
+      toast.error(`${failCount} item line(s) failed to add.`);
+    }
+    if (failCount === 0) {
+      setIsAddToCartModalOpen(false);
+    }
+  };
+
 
   return (
     <div className="space-y-4">
@@ -381,6 +475,13 @@ const handlePrintLabels = () => {
           <div className="flex items-center justify-between">
             <CardTitle className="text-xl font-bold tracking-tight">Inventory</CardTitle>
             <div className="flex gap-2">
+              <Button
+                variant="outline"
+                disabled={selectedProductsForCart.length === 0}
+                onClick={openAddToCartModal}
+              >
+                Add {selectedProductsForCart.length} To Cart
+              </Button>
               <Button 
                 disabled={Object.keys(printSelection).length === 0} 
                 className="bg-blue-600 hover:bg-blue-700"
@@ -1093,6 +1194,120 @@ const handlePrintLabels = () => {
           </div>
         </DialogContent>
       </Dialog> 
+      <Dialog open={isAddToCartModalOpen} onOpenChange={setIsAddToCartModalOpen}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-5 pt-5 pb-3 border-b bg-slate-50/70">
+            <DialogTitle className="text-base font-semibold flex items-center gap-2">
+              <ShoppingCart className="size-4 text-blue-600" />
+              Add To Cart
+            </DialogTitle>
+            <p className="text-xs text-slate-600">
+              Active cart: <span className="font-semibold">{activeCartLabel || "Not selected"}</span>
+              {" · "}
+              {selectedProductsForCart.length} item{selectedProductsForCart.length > 1 ? "s" : ""} selected
+            </p>
+          </DialogHeader>
+          <div className="max-h-[62vh] overflow-y-auto divide-y">
+            {selectedProductsForCart.map((p) => {
+              const draft = cartDrafts[p.id] || { qty: 1, room: "None" };
+              const available = p.displayStock + p.godownStock;
+              return (
+                <div key={p.id} className="px-5 py-4 bg-white space-y-3">
+                  <div className="flex items-start gap-3">
+                    <div className="size-16 min-w-16 rounded-md border bg-slate-50 overflow-hidden flex items-center justify-center">
+                      {p.photo_url ? (
+                        <img
+                          src={p.photo_url}
+                          alt={p.name}
+                          className="size-full object-cover"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                      ) : (
+                        <span className="text-[10px] text-slate-400 font-medium">No Image</span>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900 truncate">{p.name || p.barcode}</p>
+                      <p className="text-[11px] font-mono text-blue-700 mt-0.5">#{p.barcode}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-sm font-semibold text-slate-900">
+                          Rs {Number(p.selling_price || p.price || 0).toFixed(0)}
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          D:{p.displayStock} · G:{p.godownStock} · Avl:{available}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] tracking-wide uppercase font-semibold text-slate-500">Assign Room</span>
+                      <Badge variant="secondary" className="text-[10px] h-5 px-2">
+                        {draft.room}
+                      </Badge>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {roomOptions.map((room) => (
+                        <button
+                          key={room}
+                          type="button"
+                          onClick={() => updateCartDraft(p.id, { room })}
+                          className={`px-2.5 py-1 rounded-full text-[11px] border transition-colors ${
+                            draft.room === room
+                              ? "bg-blue-600 text-white border-blue-600"
+                              : "bg-white text-slate-600 border-slate-300 hover:border-blue-300"
+                          }`}
+                        >
+                          {room}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] tracking-wide uppercase font-semibold text-slate-500">Quantity</span>
+                    <div className="inline-flex items-center border rounded-md bg-white overflow-hidden">
+                      <button
+                        className="h-8 w-8 inline-flex items-center justify-center hover:bg-slate-100"
+                        onClick={() => updateCartDraft(p.id, { qty: Math.max(0, draft.qty - 1) })}
+                        type="button"
+                      >
+                        <Minus className="size-3.5" />
+                      </button>
+                      <Input
+                        type="number"
+                        value={draft.qty}
+                        min={0}
+                        className="w-14 h-8 text-center border-0 rounded-none"
+                        onChange={(e) => updateCartDraft(p.id, { qty: Math.max(0, Number(e.target.value) || 0) })}
+                      />
+                      <button
+                        className="h-8 w-8 inline-flex items-center justify-center hover:bg-slate-100"
+                        onClick={() => updateCartDraft(p.id, { qty: draft.qty + 1 })}
+                        type="button"
+                      >
+                        <Plus className="size-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <DialogFooter className="border-t px-5 py-4 bg-slate-50/80">
+            <Button variant="outline" onClick={() => setIsAddToCartModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmAddToCart} className="min-w-40">
+              <ShoppingCart className="size-4 mr-2" />
+              Add To Cart
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={!!selectedImage} onOpenChange={() => setSelectedImage(null)}>
         <DialogContent className="max-w-3xl p-0 bg-transparent border-none shadow-none flex items-center justify-center">
           <div className="relative w-full h-[80vh] flex items-center justify-center">

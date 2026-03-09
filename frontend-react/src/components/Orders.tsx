@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Package, Calendar, DollarSign, ChevronDown, ChevronRight, Download } from "lucide-react";
+import { DollarSign, HandCoins, WalletCards, TrendingUp, ChevronDown, ChevronRight, Download } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -46,10 +46,17 @@ interface OrdersProps {
   onFetchDetails: (orderId: string) => void;
   onRecordPayment: (orderId: string, amount: number, method: string) => void; // Add this 
   onDownloadInvoice: (orderId: string) => void;
+  summary?: {
+    totalRevenue: number;
+    totalReceived: number;
+    totalDue: number;
+    estimatedProfit: number;
+  };
 }
 
-export function Orders({ orders, onFetchDetails, onRecordPayment, onDownloadInvoice }: OrdersProps) {
+export function Orders({ orders, onFetchDetails, onRecordPayment, onDownloadInvoice, summary }: OrdersProps) {
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"all" | "pending" | "completed">("all");
 
   const toggleExpand = (orderId: string) => {
     if (expandedOrderId !== orderId) {
@@ -62,7 +69,14 @@ export function Orders({ orders, onFetchDetails, onRecordPayment, onDownloadInvo
 
   const pendingOrders = orders.filter((o) => o.status === "bucket" || o.status === "pi");
   const completedOrders = orders.filter((o) => o.status === "sold");
-  const totalRevenue = completedOrders.reduce((sum, o) => sum + o.total, 0);
+  const totalRevenue = summary?.totalRevenue ?? completedOrders.reduce((sum, o) => sum + o.total, 0);
+  const totalReceived = summary?.totalReceived ?? completedOrders.reduce((sum, o) => sum + (o.paidAmount || 0), 0);
+  const totalDue = summary?.totalDue ?? completedOrders.reduce((sum, o) => sum + Math.max(0, o.total - (o.paidAmount || 0)), 0);
+  const estimatedProfit = summary?.estimatedProfit ?? 0;
+  const displayedOrders =
+    activeTab === "pending" ? pendingOrders :
+    activeTab === "completed" ? completedOrders :
+    orders;
 
   const getStatusColor = (status: Order["status"]) => {
     switch (status) {
@@ -76,32 +90,44 @@ export function Orders({ orders, onFetchDetails, onRecordPayment, onDownloadInvo
   return (
     <div className="space-y-6">
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm">Total Orders</CardTitle>
-            <Package className="size-4 text-gray-500" />
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+        <Card className="min-w-0">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-0.5 pt-3 px-3">
+            <CardTitle className="text-[11px] leading-tight">Total Revenue</CardTitle>
+            <DollarSign className="size-3.5 text-gray-500" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{orders.length}</div>
+          <CardContent className="px-3 pb-3 pt-0.5">
+            <div className="text-base md:text-lg font-bold leading-none truncate">₹{totalRevenue.toLocaleString()}</div>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm">Pending Orders</CardTitle>
-            <Calendar className="size-4 text-gray-500" />
+        <Card className="min-w-0">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-0.5 pt-3 px-3">
+            <CardTitle className="text-[11px] leading-tight">Amount Received</CardTitle>
+            <HandCoins className="size-3.5 text-gray-500" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{pendingOrders.length}</div>
+          <CardContent className="px-3 pb-3 pt-0.5">
+            <div className="text-base md:text-lg font-bold leading-none truncate">₹{totalReceived.toLocaleString()}</div>
+            <p className="text-[10px] text-slate-500 mt-1">Customer payments</p>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm">Total Revenue</CardTitle>
-            <DollarSign className="size-4 text-gray-500" />
+        <Card className="min-w-0">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-0.5 pt-3 px-3">
+            <CardTitle className="text-[11px] leading-tight">Amount Due</CardTitle>
+            <WalletCards className="size-3.5 text-gray-500" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">₹{totalRevenue.toLocaleString()}</div>
+          <CardContent className="px-3 pb-3 pt-0.5">
+            <div className="text-base md:text-lg font-bold leading-none truncate">₹{totalDue.toLocaleString()}</div>
+            <p className="text-[10px] text-slate-500 mt-1">Pending from customers</p>
+          </CardContent>
+        </Card>
+        <Card className="min-w-0">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-0.5 pt-3 px-3">
+            <CardTitle className="text-[11px] leading-tight">Estimated Profit</CardTitle>
+            <TrendingUp className="size-3.5 text-gray-500" />
+          </CardHeader>
+          <CardContent className="px-3 pb-3 pt-0.5">
+            <div className="text-base md:text-lg font-bold leading-none truncate">₹{estimatedProfit.toLocaleString()}</div>
+            <p className="text-[10px] text-slate-500 mt-1">Assuming all due collected</p>
           </CardContent>
         </Card>
       </div>
@@ -109,12 +135,15 @@ export function Orders({ orders, onFetchDetails, onRecordPayment, onDownloadInvo
       <Card>
         <CardHeader><CardTitle>Order Management</CardTitle></CardHeader>
         <CardContent>
-          <Tabs defaultValue="all" className="w-full">
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "all" | "pending" | "completed")} className="w-full">
             <TabsList>
               <TabsTrigger value="all">All</TabsTrigger>
               <TabsTrigger value="pending">Pending</TabsTrigger>
               <TabsTrigger value="completed">Completed</TabsTrigger>
             </TabsList>
+            <div className="mt-3 mb-2 text-xs text-slate-500 font-medium">
+              Showing {displayedOrders.length} of {orders.length} records
+            </div>
             <TabsContent value="all"><OrderTable orders={orders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} onRecordPayment={onRecordPayment} onDownloadInvoice={onDownloadInvoice} /></TabsContent>
             <TabsContent value="pending"><OrderTable orders={pendingOrders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} onRecordPayment={onRecordPayment} onDownloadInvoice={onDownloadInvoice} /></TabsContent>
             <TabsContent value="completed"><OrderTable orders={completedOrders} expandedOrderId={expandedOrderId} onToggleExpand={toggleExpand} getStatusColor={getStatusColor} onRecordPayment={onRecordPayment} onDownloadInvoice={onDownloadInvoice} /></TabsContent>

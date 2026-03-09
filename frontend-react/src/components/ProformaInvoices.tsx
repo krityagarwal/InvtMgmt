@@ -688,10 +688,11 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
   if (!pi) return null;
   const subtotal = pi.subtotal ?? (pi.items?.reduce((sum, i) => sum + i.price * i.quantity, 0) ?? 0);
   const discountPercent = pi.discount_percent ?? pi.discount ?? 0;
-  const discountAmount = pi.discount_amount ?? (subtotal * discountPercent / 100);
-  const taxableAmount = subtotal - discountAmount;
-  const taxPercent = pi.tax_percent ?? 18;
-  const taxAmount = pi.tax_amount ?? (taxableAmount * taxPercent / 100);
+  const discountPercentDisplay = Number(discountPercent).toFixed(2);
+  const discountAmount = pi.discount_amount ?? Math.floor(subtotal * discountPercent / 100);
+  const taxableAmount = Math.max(0, subtotal - discountAmount);
+  const taxPercent = pi.tax_percent ?? 0;
+  const taxAmount = pi.tax_amount ?? Math.ceil(taxableAmount * taxPercent / 100);
   const finalTotal = pi.final_total ?? (taxableAmount + taxAmount);
   const balanceDue = finalTotal - (pi.paidAmount || 0);
   const docTitle = docType === "INVOICE" ? "Invoice" : "Proforma Invoice";
@@ -704,19 +705,16 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '40px' }}>
         <div>
-          <h1 style={{ fontSize: '28px', fontWeight: '800', color: '#0f172a', margin: 0, letterSpacing: '-0.5px' }}>The Light Code</h1>
+          <h1 style={{ fontSize: '28px', fontWeight: '800', color: '#0f172a', margin: 0, letterSpacing: '-0.5px' }}>TLC Lighting (The Light Code)</h1>
           <p style={{ fontSize: '11px', color: '#64748b', marginTop: '6px', lineHeight: '1.6', maxWidth: '280px' }}>
             3rd Floor, Dwarika Heights, Eastern Bypass,<br />
             Don Bosco Colony, Siliguri, WB - 734008
           </p>
-          <p style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>Phone: +91 XXXXX XXXXX</p>
-          <p style={{ fontSize: '11px', fontWeight: '600', marginTop: '4px', color: '#334155' }}>GSTIN: 19AAHCT0000A1Z5</p>
+          <p style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>Phone: 7872663828</p>
         </div>
         <div style={{ textAlign: 'right' }}>
-          <div style={{ display: 'inline-block', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '16px 24px' }}>
-            <p style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '2px', color: '#94a3b8', margin: 0, fontWeight: '600' }}>{docTitle}</p>
-            <p style={{ fontSize: '22px', fontWeight: '800', color: '#0f172a', margin: '4px 0 0 0', fontFamily: 'monospace' }}>#{docNumber}</p>
-          </div>
+          <p style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1.2px', color: '#64748b', margin: 0, fontWeight: '700' }}>{docTitle}</p>
+          <p style={{ fontSize: '18px', fontWeight: '800', color: '#0f172a', margin: '2px 0 0 0', fontFamily: 'monospace' }}>#{docNumber}</p>
           <p style={{ fontSize: '12px', color: '#64748b', marginTop: '10px' }}>
             Issued: <strong style={{ color: '#334155' }}>{new Date(pi.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</strong>
           </p>
@@ -728,7 +726,7 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
           <p style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1.2px', color: '#94a3b8', fontWeight: '700', margin: 0 }}>Bill To</p>
           <p style={{ fontWeight: '700', fontSize: '14px', margin: '6px 0 0 0', color: '#0f172a' }}>{pi.clientName || "Walk-in Customer"}</p>
           <p style={{ fontSize: '11px', color: '#475569', margin: '4px 0 0 0' }}>
-            {[pi.clientPhone, pi.referralSource ? `Ref: ${pi.referralSource}` : ""].filter(Boolean).join("  |  ") || "-"}
+            {pi.clientPhone || "-"}
           </p>
         </div>
         <div style={{ padding: '12px 14px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
@@ -744,7 +742,7 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
             <th style={{ padding: '12px 10px', fontSize: '9px', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '1px', color: '#ffffff', backgroundColor: '#1e3a5f', fontWeight: '600' }}>Photo</th>
             <th style={{ padding: '12px 10px', fontSize: '9px', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '1px', color: '#ffffff', backgroundColor: '#1e3a5f', fontWeight: '600' }}>Description</th>
             <th style={{ padding: '12px 10px', fontSize: '9px', textAlign: 'center', textTransform: 'uppercase', letterSpacing: '1px', color: '#ffffff', backgroundColor: '#1e3a5f', fontWeight: '600' }}>Qty</th>
-            <th style={{ padding: '12px 10px', fontSize: '9px', textAlign: 'right', textTransform: 'uppercase', letterSpacing: '1px', color: '#ffffff', backgroundColor: '#1e3a5f', fontWeight: '600' }}>Unit Price</th>
+            <th style={{ padding: '12px 10px', fontSize: '9px', textAlign: 'right', textTransform: 'uppercase', letterSpacing: '1px', color: '#ffffff', backgroundColor: '#1e3a5f', fontWeight: '600' }}>Price / Unit</th>
             <th style={{ padding: '12px 10px', fontSize: '9px', textAlign: 'right', textTransform: 'uppercase', letterSpacing: '1px', color: '#ffffff', backgroundColor: '#1e3a5f', fontWeight: '600' }}>Amount</th>
           </tr>
         </thead>
@@ -754,7 +752,9 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
               <td style={{ padding: '14px 10px', color: '#94a3b8', fontWeight: '500' }}>{String(idx + 1).padStart(2, '0')}</td>
               <td style={{ padding: '14px 10px' }}>
                 <div style={{ width: '64px', height: '64px', border: '1px solid #e2e8f0', borderRadius: '6px', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc' }}>
-                  <img src={item.photo_url || 'https://placehold.co/80x80/f1f5f9/94a3b8?text=N/A'} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'cover' }} crossOrigin="anonymous" />
+                  {item.photo_url ? (
+                    <img src={item.photo_url} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'cover' }} crossOrigin="anonymous" />
+                  ) : null}
                 </div>
               </td>
               <td style={{ padding: '14px 10px' }}>
@@ -769,7 +769,7 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
                 )}
               </td>
               <td style={{ padding: '14px 10px', textAlign: 'center', fontWeight: '600' }}>{item.quantity}</td>
-              <td style={{ padding: '14px 10px', textAlign: 'right', color: '#475569' }}>₹{item.price.toLocaleString('en-IN')}</td>
+              <td style={{ padding: '14px 10px', textAlign: 'right', color: '#475569' }}>₹{item.price.toLocaleString('en-IN')} / unit</td>
               <td style={{ padding: '14px 10px', textAlign: 'right', fontWeight: '700', color: '#0f172a' }}>₹{(item.price * item.quantity).toLocaleString('en-IN')}</td>
             </tr>
           ))}
@@ -782,16 +782,18 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
             <span>Subtotal</span>
             <span style={{ fontWeight: '600' }}>₹{subtotal.toLocaleString('en-IN')}</span>
           </div>
-          {discountPercent > 0 && (
+          {discountAmount > 0 && discountPercent > 0 && (
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: '13px', color: '#dc2626' }}>
-              <span>Discount ({discountPercent}%)</span>
+              <span>Discount ({discountPercentDisplay}%)</span>
               <span style={{ fontWeight: '600' }}>−₹{discountAmount.toLocaleString('en-IN')}</span>
             </div>
           )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: '13px', color: '#475569', borderBottom: '1px solid #e2e8f0' }}>
-            <span>GST ({taxPercent}%)</span>
-            <span style={{ fontWeight: '600' }}>₹{taxAmount.toLocaleString('en-IN')}</span>
-          </div>
+          {taxPercent > 0 && taxAmount > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: '13px', color: '#475569', borderBottom: '1px solid #e2e8f0' }}>
+              <span>GST ({taxPercent}%)</span>
+              <span style={{ fontWeight: '600' }}>₹{taxAmount.toLocaleString('en-IN')}</span>
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 0 8px', alignItems: 'center' }}>
             <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: '700', color: '#0f172a' }}>Grand Total</span>
             <span style={{ fontSize: '22px', fontWeight: '800', color: '#1e3a5f' }}>₹{finalTotal.toLocaleString('en-IN')}</span>
@@ -802,10 +804,12 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
                 <span>Paid</span>
                 <span style={{ fontWeight: '600' }}>₹{(pi.paidAmount || 0).toLocaleString('en-IN')}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', fontSize: '13px', backgroundColor: '#fef2f2', borderRadius: '6px', color: '#b91c1c', fontWeight: '700' }}>
-                <span>Balance Due</span>
-                <span>₹{balanceDue.toLocaleString('en-IN')}</span>
-              </div>
+              {balanceDue > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', fontSize: '13px', backgroundColor: '#fef2f2', borderRadius: '6px', color: '#b91c1c', fontWeight: '700' }}>
+                  <span>Balance Due</span>
+                  <span>₹{balanceDue.toLocaleString('en-IN')}</span>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -826,7 +830,7 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
         <div style={{ textAlign: 'right' }}>
           <p style={{ fontSize: '10px', color: '#94a3b8', margin: '0 0 24px 0' }}>Authorized Signatory</p>
           <div style={{ borderTop: '1px solid #cbd5e1', width: '160px', marginLeft: 'auto' }} />
-          <p style={{ fontSize: '10px', color: '#64748b', margin: '4px 0 0 0', fontWeight: '600' }}>The Light Code</p>
+          <p style={{ fontSize: '10px', color: '#64748b', margin: '4px 0 0 0', fontWeight: '600' }}>TLC Lighting (The Light Code)</p>
         </div>
       </div>
       {/* Bottom accent bar */}
