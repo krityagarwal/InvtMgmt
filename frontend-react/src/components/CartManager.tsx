@@ -21,6 +21,7 @@ export interface ClientCart {
   deliveryAddress?: string;      // Optional
   items: CartItem[];
   discount: number;
+  extraDiscount?: number;
   createdAt: string;
   tax: number;
   advancePaid?: number;
@@ -107,7 +108,7 @@ export function CartManager({
                           {getCartItemCount(cart)} {getCartItemCount(cart) === 1 ? "item" : "items"}
                         </span>
                         <span className="font-semibold">
-                          ${getCartTotal(cart).toFixed(2)}
+                          ₹{getCartTotal(cart).toFixed(2)}
                         </span>
                       </div>
                       <p className="text-xs text-gray-400 mt-1">

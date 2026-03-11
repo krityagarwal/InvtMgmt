@@ -4,11 +4,13 @@ import { User, Calendar } from "lucide-react";
 export interface FinancialData {
   subtotal?: number;
   discount_amount?: number;
+  extra_discount_amount?: number;
   discount_percent?: number;
   tax_percent?: number;
   tax_amount?: number;
   final_total?: number;
   total?: number;
+  write_off_amount?: number;
 }
 
 export interface OrderDetailsViewProps {
@@ -73,10 +75,24 @@ export function OrderDetailsView({
           </div>
         )}
 
+        {(financial.extra_discount_amount || 0) > 0 && (
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-600">Extra Discount</span>
+            <span className="text-red-600">-₹{(financial.extra_discount_amount || 0).toLocaleString()}</span>
+          </div>
+        )}
+
         {financial.tax_percent !== undefined && financial.tax_percent > 0 && (
           <div className="flex justify-between text-sm">
             <span className="text-gray-600">Tax ({financial.tax_percent}%)</span>
             <span>₹{(financial.tax_amount || 0).toLocaleString()}</span>
+          </div>
+        )}
+
+        {(financial.write_off_amount || 0) > 0 && (
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-600">Write-Off</span>
+            <span className="text-red-600">-₹{(financial.write_off_amount || 0).toLocaleString()}</span>
           </div>
         )}
 

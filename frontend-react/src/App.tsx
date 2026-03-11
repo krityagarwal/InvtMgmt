@@ -6,6 +6,7 @@ import { Orders, Order } from "./components/Orders";
 import { Cart, CartItem } from "./components/Cart";
 import { CartManager, ClientCart } from "./components/CartManager";
 import { ProformaInvoices, ProformaInvoice, PrintLayout, PrintDocumentType } from "./components/ProformaInvoices";
+import { History, AuditEvent } from "./components/History";
 import { Button } from "./components/ui/button";
 import { Badge } from "./components/ui/badge";
 import { toast } from "sonner";
@@ -30,7 +31,7 @@ import { Label } from "./components/ui/label";
 const PRESELECTED_SHOP_ID = "102e6445-6462-4cb6-bcbf-e9dd43a70b7e";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
-type View = "home" | "scanner" | "inventory" | "orders" | "cart" | "proforma" | "login";
+type View = "home" | "scanner" | "inventory" | "orders" | "cart" | "proforma" | "history" | "login";
 
 export default function App() {
   const [clientCarts, setClientCarts] = useState<ClientCart[]>([]);
@@ -61,9 +62,10 @@ export default function App() {
     totalRevenue: 0,
     totalReceived: 0,
     totalDue: 0,
+    totalWriteOff: 0,
     estimatedProfit: 0,
   });
-  const cartDraftRef = useRef<Record<string, { discount?: number; tax?: number; pricingMode?: "discount" | "finalized"; finalTotalOverride?: number }>>({});
+  const cartDraftRef = useRef<Record<string, { discount?: number; extraDiscount?: number; tax?: number }>>({});
   const [showPIPreview, setShowPIPreview] = useState(false);
   const [piPreviewUrl, setPiPreviewUrl] = useState<string | null>(null);
   const [piPreviewData, setPiPreviewData] = useState<ProformaInvoice | null>(null);
@@ -74,8 +76,8 @@ export default function App() {
       order_id: string;
       discount_percent: number;
       tax_percent: number;
+      extra_discount_amount: number;
       paid_amount: number;
-      final_total_override?: number | null;
       referral_source: string;
       delivery_address: string;
       client_phone: string;
@@ -89,8 +91,8 @@ export default function App() {
       status: string;
       discount_percent: number;
       tax_percent: number;
+      extra_discount_amount: number;
       paid_amount: number;
-      final_total_override?: number | null;
       referral_source: string;
       delivery_address: string;
       client_phone: string;
@@ -101,6 +103,9 @@ export default function App() {
 
   const activeCart = clientCarts.find((cart) => cart.id === activeCartId);
   const [autoDownloadPIId, setAutoDownloadPIId] = useState<string | null>(null);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [auditEntityType, setAuditEntityType] = useState<string>("all");
+  const [auditLoading, setAuditLoading] = useState(false);
 
   const viewRef = useRef(currentView);
 
@@ -108,6 +113,12 @@ export default function App() {
 useEffect(() => {
   console.log("🚩 VIEW CHANGED TO:", currentView);
   // This will tell us if a piece of code is manually calling setCurrentView('home')
+}, [currentView]);
+
+useEffect(() => {
+  if (currentView === "history") {
+    handleLoadAuditEvents(auditEntityType);
+  }
 }, [currentView]);
 
 // 2. Monitor Auth State Changes
@@ -223,17 +234,30 @@ useEffect(() => {
 }, [currentView]);
 
 
-  const apiCall = async (url: string, options?: RequestInit) => {
+  const apiCall = async (
+    url: string,
+    options?: RequestInit,
+    config?: { suppressToast?: boolean }
+  ) => {
     setIsLoading(true);
     try {
       const response = await fetch(url, options);
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || "Network response was not ok");
+        const detail = errorData?.detail;
+        const status = response.status;
+        const statusText = response.statusText || "Request failed";
+        const message = detail
+          ? `${status} ${statusText}: ${detail}`
+          : `${status} ${statusText}`;
+        throw new Error(message);
       }
       return await response.json(); 
     } catch (error: any) {
-      toast.error(error.message || "Something went wrong");
+      if (!config?.suppressToast) {
+        const fallback = "Something went wrong";
+        toast.error(error?.message ? String(error.message) : fallback);
+      }
       throw error;
     } finally {
       setIsLoading(false);
@@ -243,18 +267,21 @@ useEffect(() => {
   const calculateRoundedBilling = (
     subtotal: number,
     discountPercent: number,
-    taxPercent: number
+    taxPercent: number,
+    extraDiscountAmount: number = 0
   ) => {
     const safeSubtotal = Number(subtotal) || 0;
     const safeDiscount = Number(discountPercent) || 0;
     const safeTax = Number(taxPercent) || 0;
+    const safeExtraDiscount = Math.max(0, Math.floor(Number(extraDiscountAmount) || 0));
 
     const discountAmount = Math.floor(safeSubtotal * (safeDiscount / 100));
-    const taxableAmount = Math.max(0, safeSubtotal - discountAmount);
+    const clampedExtraDiscount = Math.min(safeExtraDiscount, Math.max(0, Math.floor(safeSubtotal) - discountAmount));
+    const taxableAmount = Math.max(0, safeSubtotal - discountAmount - clampedExtraDiscount);
     const taxAmount = Math.ceil(taxableAmount * (safeTax / 100));
     const finalTotal = taxableAmount + taxAmount;
 
-    return { discountAmount, taxAmount, finalTotal };
+    return { discountAmount, extraDiscountAmount: clampedExtraDiscount, taxAmount, finalTotal };
   };
 
   // Inside App.tsx
@@ -280,13 +307,15 @@ useEffect(() => {
     if (Object.keys(patchPayload).length === 0) return;
 
     try {
-      const response = await fetch(`${API_BASE_URL}/inventory/${updatedProduct.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patchPayload),
-      });
-
-      if (!response.ok) throw new Error("Update failed");
+      await apiCall(
+        `${API_BASE_URL}/inventory/${updatedProduct.id}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patchPayload),
+        },
+        { suppressToast: true }
+      );
 
       // Sync the global state
       setProducts(prev => prev.map(p => 
@@ -385,6 +414,7 @@ const handleBulkAdd = async (newItems: any[]) => {
           deliveryAddress: order.delivery_address ?? details.delivery_address ?? "",
           createdAt: order.created_at,
           discount: order.discount_percent ?? 0,
+          extraDiscount: order.extra_discount_amount ?? details.extra_discount_amount ?? 0,
           tax: order.tax_percent ?? 0,
           advancePaid: order.paid_amount ?? details.paid_amount ?? 0,
           // Map backend items to your CartItem interface
@@ -427,10 +457,13 @@ const handleBulkAdd = async (newItems: any[]) => {
         status: o.status,
         date: new Date(o.created_at).toLocaleDateString(),
         discount: o.discount_percent || 0,
+        extra_discount_amount: o.extra_discount_amount || 0,
         items: [],
         paidAmount: o.paid_amount || 0,
-        discountAmount: o.discount_amount || 0,
-        taxAmount: o.tax_amount || 0
+        discount_amount: o.discount_amount || 0,
+        tax_amount: o.tax_amount || 0,
+        write_off_amount: o.write_off_amount || 0,
+        write_off_notes: o.write_off_notes || ""
       }));
       
       setOrders(mappedOrders);
@@ -438,6 +471,7 @@ const handleBulkAdd = async (newItems: any[]) => {
         totalRevenue: Number(summary.total_revenue) || 0,
         totalReceived: Number(summary.total_received) || 0,
         totalDue: Number(summary.total_due) || 0,
+        totalWriteOff: Number(summary.total_write_off) || 0,
         estimatedProfit: Number(summary.estimated_profit) || 0,
       });
       setOrdersLoaded(true);
@@ -460,8 +494,9 @@ const handleBulkAdd = async (newItems: any[]) => {
         status: o.status,
         date: new Date(o.created_at).toLocaleDateString(),
         discount: o.discount_percent || 0,
-        discountAmount: o.discount_amount || 0,
-        taxAmount: o.tax_amount || 0,
+        extra_discount_amount: o.extra_discount_amount || 0,
+        discount_amount: o.discount_amount || 0,
+        tax_amount: o.tax_amount || 0,
         items: []
       }));
       
@@ -635,6 +670,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         items: initialItems,
         createdAt: new Date().toISOString(),
         discount: 0, 
+        extraDiscount: 0,
         tax: 0
       };
 
@@ -785,6 +821,40 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     }
   };
 
+  const handleUpdateItemRoom = async (
+    productId: string,
+    metadata: { label: string; qty: number }[]
+  ) => {
+    if (!activeCartId) return;
+
+    try {
+      await apiCall(`${API_BASE_URL}/order/update-item-metadata`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          order_id: activeCartId,
+          product_id: productId,
+          attribute_metadata: metadata,
+        }),
+      });
+
+      setClientCarts((prev) =>
+        prev.map((cart) => {
+          if (cart.id !== activeCartId) return cart;
+          return {
+            ...cart,
+            items: cart.items.map((line) =>
+              line.id === productId ? { ...line, attribute_metadata: metadata } : line
+            ),
+          };
+        })
+      );
+    } catch (error) {
+      console.error("Room update failed:", error);
+      toast.error("Failed to update room");
+    }
+  };
+
   const renderDocumentPdf = async (
     doc: ProformaInvoice,
     docType: PrintDocumentType
@@ -862,12 +932,15 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         updatedAt: target.date,
         subtotal: details.subtotal || target.subtotal || 0,
         discount_amount: details.discount_amount || target.discount_amount || 0,
+        extra_discount_amount: details.extra_discount_amount || target.extra_discount_amount || 0,
         discount_percent: details.discount_percent ?? target.discount_percent ?? target.discount ?? 0,
         tax_percent: details.tax_percent ?? target.tax_percent ?? 0,
         tax_amount: details.tax_amount || target.tax_amount || 0,
         final_total: details.final_total || target.final_total || target.total || 0,
         total: details.final_total || target.total || 0,
         paidAmount: target.paidAmount || 0,
+        write_off_amount: details.write_off_amount || target.write_off_amount || 0,
+        write_off_notes: details.write_off_notes || target.write_off_notes || "",
         clientPhone: details.client_phone || target.clientPhone || "",
         referralSource: details.referral_source || target.referralSource || "",
         deliveryAddress: details.delivery_address || target.deliveryAddress || "",
@@ -892,7 +965,8 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       return {
         ...cart,
         discount: draft.discount ?? cart.discount,
-        tax: draft.tax ?? cart.tax,
+        extraDiscount: draft.extraDiscount ?? cart.extraDiscount ?? 0,
+        tax: 0,
       };
     })();
     if (!activeCart) return;
@@ -914,12 +988,9 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     const payload = {
       order_id: activeCartId,
       discount_percent: Number(activeCart.discount) || 0,
-      tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 0,
+      tax_percent: 0,
+      extra_discount_amount: Number(activeCart.extraDiscount) || 0,
       paid_amount: Number(activeCart.advancePaid) || 0,
-      final_total_override:
-        draft.pricingMode === "finalized" && draft.finalTotalOverride !== undefined
-          ? Number(draft.finalTotalOverride)
-          : null,
       referral_source: activeCart.referralSource || "",
       delivery_address: activeCart.deliveryAddress || "",
       client_phone: activeCart.clientPhone || ""
@@ -927,13 +998,15 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
 
     try {
       const effectiveDiscount = Number(activeCart.discount) || 0;
-      const effectiveTax = activeCart.tax !== undefined ? Number(activeCart.tax) : 0;
+      const effectiveExtraDiscount = Number(activeCart.extraDiscount) || 0;
+      const effectiveTax = 0;
       const details = await apiCall(`${API_BASE_URL}/basket/details/${activeCartId}`);
       const subtotal = Number(details.subtotal) || 0;
-      const { discountAmount, taxAmount, finalTotal } = calculateRoundedBilling(
+      const { discountAmount, extraDiscountAmount, taxAmount, finalTotal } = calculateRoundedBilling(
         subtotal,
         effectiveDiscount,
-        effectiveTax
+        effectiveTax,
+        effectiveExtraDiscount
       );
 
       const previewInvoice: ProformaInvoice = {
@@ -953,6 +1026,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         updatedAt: new Date().toISOString(),
         subtotal,
         discount_amount: discountAmount,
+        extra_discount_amount: extraDiscountAmount,
         discount_percent: effectiveDiscount,
         tax_percent: effectiveTax,
         tax_amount: taxAmount,
@@ -1017,8 +1091,11 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
           status: o.status,
           date: new Date(o.created_at).toLocaleDateString(),
           discount: o.discount_percent || 0,
-          discountAmount: o.discount_amount || 0,
-          taxAmount: o.tax_amount || 0,
+          discount_amount: o.discount_amount || 0,
+          extra_discount_amount: o.extra_discount_amount || 0,
+          tax_amount: o.tax_amount || 0,
+          write_off_amount: o.write_off_amount || 0,
+          write_off_notes: o.write_off_notes || "",
           photo_url: o.photo_url || "",
           attribute_metadata: o.attribute_metadata || []
         }));
@@ -1044,10 +1121,13 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
             items: mappedItems,
             subtotal: apiData.subtotal,
             discount_amount: apiData.discount_amount,
+            extra_discount_amount: apiData.extra_discount_amount,
             discount_percent: apiData.discount_percent,
             tax_percent: apiData.tax_percent,
             tax_amount: apiData.tax_amount,
             final_total: apiData.final_total,
+            write_off_amount: apiData.write_off_amount,
+            write_off_notes: apiData.write_off_notes,
             clientPhone: apiData.client_phone,        
             referralSource: apiData.referral_source, 
             deliveryAddress: apiData.delivery_address
@@ -1057,21 +1137,6 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     } catch (error) { 
       console.error("Failed to load items:", error);
     }
-  };
-
-  const updateCartTax = (cartId: string | null, newTax: number | "") => {
-    const taxValue = newTax === "" ? 0 : newTax; // Default to 0 if empty
-    if (cartId) {
-      cartDraftRef.current[cartId] = {
-        ...cartDraftRef.current[cartId],
-        tax: Number(taxValue),
-      };
-    }
-    setClientCarts((prevCarts) =>
-      prevCarts.map((cart) =>
-        cart.id === cartId ? { ...cart, tax: taxValue } : cart
-      )
-    );
   };
 
   const handleUpdateDiscount = (discount: number) => {
@@ -1089,22 +1154,20 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     );
   };
 
-  const handlePricingModeChange = (mode: "discount" | "finalized") => {
+  const handleUpdateExtraDiscount = (amount: number) => {
     if (!activeCartId) return;
+    const normalized = Math.max(0, Math.floor(Number(amount) || 0));
     cartDraftRef.current[activeCartId] = {
       ...cartDraftRef.current[activeCartId],
-      pricingMode: mode,
-      finalTotalOverride:
-        mode === "finalized" ? cartDraftRef.current[activeCartId]?.finalTotalOverride : undefined,
+      extraDiscount: normalized,
     };
-  };
 
-  const handleFinalizedPriceChange = (value: number | null) => {
-    if (!activeCartId) return;
-    cartDraftRef.current[activeCartId] = {
-      ...cartDraftRef.current[activeCartId],
-      finalTotalOverride: value === null ? undefined : Number(value),
-    };
+    setClientCarts((prev) =>
+      prev.map((cart) => {
+        if (cart.id !== activeCartId) return cart;
+        return { ...cart, extraDiscount: normalized };
+      })
+    );
   };
 
   // Inside App.tsx
@@ -1137,7 +1200,8 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       return {
         ...cart,
         discount: draft.discount ?? cart.discount,
-        tax: draft.tax ?? cart.tax,
+        extraDiscount: draft.extraDiscount ?? cart.extraDiscount ?? 0,
+        tax: 0,
       };
     })();
     if (!activeCart) return;
@@ -1149,12 +1213,9 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
           order_id: activeCartId, 
           status: "bucket", // Keep as active bucket
           discount_percent: Number(activeCart.discount) || 0,
-          tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 0,
+          tax_percent: 0,
+          extra_discount_amount: Number(activeCart.extraDiscount) || 0,
           paid_amount: activeCart.advancePaid || 0,
-          final_total_override:
-            draft.pricingMode === "finalized" && draft.finalTotalOverride !== undefined
-              ? Number(draft.finalTotalOverride)
-              : null,
           referral_source: activeCart.referralSource || "",
           delivery_address: activeCart.deliveryAddress || "",
           client_phone: activeCart.clientPhone || ""
@@ -1177,7 +1238,8 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       return {
         ...cart,
         discount: draft.discount ?? cart.discount,
-        tax: draft.tax ?? cart.tax,
+        extraDiscount: draft.extraDiscount ?? cart.extraDiscount ?? 0,
+        tax: 0,
       };
     })();
     if (!activeCart) return;
@@ -1188,12 +1250,9 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         order_id: cartIdToConvert,
         status: "pi",
         discount_percent: Number(activeCart.discount) || 0,
-        tax_percent: activeCart.tax !== undefined ? Number(activeCart.tax) : 0,
+        tax_percent: 0,
+        extra_discount_amount: Number(activeCart.extraDiscount) || 0,
         paid_amount: activeCart.advancePaid || 0,
-        final_total_override:
-          draft.pricingMode === "finalized" && draft.finalTotalOverride !== undefined
-            ? Number(draft.finalTotalOverride)
-            : null,
         referral_source: activeCart.referralSource || "",
         delivery_address: activeCart.deliveryAddress || "",
         client_phone: activeCart.clientPhone || ""
@@ -1202,12 +1261,14 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       // Preview first; do not persist PI yet
       const piDetails = await apiCall(`${API_BASE_URL}/basket/details/${cartIdToConvert}`);
       const effectiveDiscount = Number(activeCart.discount) || 0;
-      const effectiveTax = activeCart.tax !== undefined ? Number(activeCart.tax) : 0;
+      const effectiveExtraDiscount = Number(activeCart.extraDiscount) || 0;
+      const effectiveTax = 0;
       const subtotal = Number(piDetails.subtotal) || 0;
-      const { discountAmount, taxAmount, finalTotal } = calculateRoundedBilling(
+      const { discountAmount, extraDiscountAmount, taxAmount, finalTotal } = calculateRoundedBilling(
         subtotal,
         effectiveDiscount,
-        effectiveTax
+        effectiveTax,
+        effectiveExtraDiscount
       );
       const previewPI: ProformaInvoice = {
         id: cartIdToConvert,
@@ -1226,6 +1287,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         updatedAt: new Date().toISOString(),
         subtotal,
         discount_amount: discountAmount,
+        extra_discount_amount: extraDiscountAmount,
         discount_percent: effectiveDiscount,
         tax_percent: effectiveTax,
         tax_amount: taxAmount,
@@ -1294,6 +1356,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         clientName: pi.clientName,
         items: freshItems,
         discount: data.discount_percent ?? 0,
+        extraDiscount: data.extra_discount_amount ?? 0,
         tax: data.tax_percent ?? 0,
         advancePaid: data.paid_amount || 0,
         referralSource: data.referral_source || "",
@@ -1305,12 +1368,8 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       cartDraftRef.current[pi.id] = {
         ...cartDraftRef.current[pi.id],
         discount: Number(data.discount_percent ?? 0),
+        extraDiscount: Number(data.extra_discount_amount ?? 0),
         tax: Number(data.tax_percent ?? 0),
-        pricingMode: "finalized",
-        finalTotalOverride:
-          data.final_total !== undefined && data.final_total !== null
-            ? Number(data.final_total)
-            : undefined,
       };
 
       setClientCarts((prev) => {
@@ -1336,8 +1395,6 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       // Derive current stock at runtime from the master product list
       stock: masterProduct ? (masterProduct.displayStock + masterProduct.godownStock) : 0
     };}) || [];
-  const activeCartDraft = activeCartId ? cartDraftRef.current[activeCartId] : undefined;
-
   const getTotalCartCount = () => {
     return clientCarts.reduce(
       (sum, cart) =>
@@ -1359,12 +1416,12 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     );
   };
 
-  const handleRecordPayment = async (orderId: string, amount: number, method: string) => {
+  const handleRecordPayment = async (orderId: string, amount: number, method: string, notes?: string) => {
     try {
       await apiCall(`${API_BASE_URL}/order/record-payment`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ order_id: orderId, amount, method }),
+        body: JSON.stringify({ order_id: orderId, amount, method, notes }),
       });
 
       // Re-fetch orders to update the 'Paid' and 'Balance' columns
@@ -1372,6 +1429,108 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       toast.success(`Payment of ₹${amount} recorded successfully!`);
     } catch (error) {
       console.error("Payment failed:", error);
+    }
+  };
+
+  const handleWriteOff = async (orderId: string, amount: number, reason?: string, notes?: string) => {
+    try {
+      await apiCall(`${API_BASE_URL}/order/write-off`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: orderId, amount, reason, notes }),
+      });
+
+      await handleLoadOrders(true);
+      await handleFetchWriteOffs(orderId);
+      toast.success(`Write-off of ₹${amount} recorded successfully!`);
+    } catch (error) {
+      console.error("Write-off failed:", error);
+    }
+  };
+
+  const handleFetchPayments = async (orderId: string) => {
+    try {
+      const rows = await apiCall(`${API_BASE_URL}/order/payments/${orderId}`);
+      const payments = (rows || []).map((row: any) => {
+        if (row && typeof row === "object" && !Array.isArray(row)) {
+          return {
+            id: row.id,
+            amount: Number(row.amount ?? 0),
+            payment_method: row.payment_method,
+            notes: row.notes,
+            created_at: row.transaction_date ?? row.created_at ?? null,
+          };
+        }
+        return {
+          id: row[0],
+          amount: Number(row[1] ?? 0),
+          payment_method: row[2],
+          notes: row[3],
+          created_at: row[4] ?? null,
+        };
+      });
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, payments } : o)));
+    } catch (error) {
+      console.error("Failed to fetch payments:", error);
+    }
+  };
+
+  const handleFetchWriteOffs = async (orderId: string) => {
+    try {
+      const rows = await apiCall(`${API_BASE_URL}/order/write-offs/${orderId}`);
+      const writeOffs = (rows || []).map((row: any) => ({
+        id: row.id,
+        amount: Number(row.amount ?? 0),
+        reason: row.reason,
+        notes: row.notes,
+        created_at: row.created_at,
+      }));
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, writeOffs } : o)));
+    } catch (error) {
+      console.error("Failed to fetch write-offs:", error);
+    }
+  };
+
+  const handleLoadAuditEvents = async (entityType: string = auditEntityType) => {
+    setAuditLoading(true);
+    try {
+      const query = entityType && entityType !== "all" ? `?entity_type=${encodeURIComponent(entityType)}` : "";
+      const data = await apiCall(`${API_BASE_URL}/audit/events/${PRESELECTED_SHOP_ID}${query}`);
+      const mapped: AuditEvent[] = (data || []).map((row: any) => {
+        if (row && typeof row === "object" && !Array.isArray(row)) {
+          return {
+            id: row.id,
+            entity_type: row.entity_type,
+            entity_id: row.entity_id,
+            action: row.action,
+            actor_id: row.actor_id,
+            actor_email: row.actor_email,
+            source: row.source,
+            notes: row.notes,
+            before: row.before,
+            after: row.after,
+            created_at: row.created_at,
+          };
+        }
+        return {
+          id: row[0],
+          entity_type: row[1],
+          entity_id: row[2],
+          action: row[3],
+          actor_id: row[4],
+          actor_email: row[5],
+          source: row[6],
+          notes: row[7],
+          before: row[8],
+          after: row[9],
+          created_at: row[10],
+        };
+      });
+      setAuditEvents(mapped);
+    } catch (error) {
+      console.error("Failed to load audit events:", error);
+    } finally {
+      setAuditLoading(false);
     }
   };
 
@@ -1727,9 +1886,24 @@ return (
               <Orders
                 orders={orders}
                 onFetchDetails={fetchOrderItems}
+                onFetchPayments={handleFetchPayments}
                 onRecordPayment={handleRecordPayment}
+                onFetchWriteOffs={handleFetchWriteOffs}
+                onWriteOff={handleWriteOff}
                 onDownloadInvoice={handleDownloadInvoice}
                 summary={orderSummary}
+              />
+            )}
+            {currentView === "history" && (
+              <History
+                events={auditEvents}
+                entityType={auditEntityType}
+                onEntityTypeChange={(value) => {
+                  setAuditEntityType(value);
+                  handleLoadAuditEvents(value);
+                }}
+                onRefresh={() => handleLoadAuditEvents(auditEntityType)}
+                isLoading={auditLoading}
               />
             )}
 
@@ -1747,23 +1921,21 @@ return (
                   products={products}
                   clientName={activeCart?.clientName || null}
                   discount={activeCart?.discount || 0}
+                  extraDiscount={activeCart?.extraDiscount || 0}
                   activeCart={activeCart}
                   activeCartId={activeCartId}
                   onUpdateQuantity={handleUpdateQuantity}
                   onRemoveItem={handleRemoveItem}
                   onCheckout={handleCheckout}
                   onUpdateDiscount={handleUpdateDiscount}
-                  updateCartTax={updateCartTax}
+                  onUpdateExtraDiscount={handleUpdateExtraDiscount}
                   onGeneratePI={handleGeneratePI}
                   onSaveCart={handleSaveCart}
                   onUpdateAdvance={handleUpdateAdvance}
                   onUpdateAddress={(val) => handleUpdateCartMetadata('deliveryAddress', val)}
                   onUpdatePhone={(val) => handleUpdateCartMetadata('clientPhone', val)}
                   onUpdateReferral={(val) => handleUpdateCartMetadata('referralSource', val)}
-                  onPricingModeChange={handlePricingModeChange}
-                  onFinalizedPriceChange={handleFinalizedPriceChange}
-                  pricingModeDraft={activeCartDraft?.pricingMode}
-                  finalTotalOverrideDraft={activeCartDraft?.finalTotalOverride}
+                  onUpdateItemRoom={handleUpdateItemRoom}
                 />
               </div>
             )}
@@ -1782,6 +1954,7 @@ return (
                   updatedAt: o.date,
                   subtotal: o.subtotal,
                   discount_amount: o.discount_amount,
+                  extra_discount_amount: o.extra_discount_amount,
                   discount_percent: o.discount_percent,
                   tax_percent: o.tax_percent,
                   tax_amount: o.tax_amount,

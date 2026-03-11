@@ -201,8 +201,8 @@ React.useEffect(() => {
 
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [isAddToCartModalOpen, setIsAddToCartModalOpen] = useState(false);
-  const [cartDrafts, setCartDrafts] = useState<Record<string, { qty: number; room: string }>>({});
-  const roomOptions = ["None", "Living Room", "Bedroom", "Kitchen", "Dining", "Outdoor"];
+  const [cartDrafts, setCartDrafts] = useState<Record<string, { qty: number; room: string; customRoom?: string }>>({});
+  const roomOptions = ["None", "Living Room", "Bedroom", "Kitchen", "Dining", "Outdoor", "Custom"];
   // When initializing or adding a row, give it a random ID
   const [bulkRows, setBulkRows] = useState<any[]>([
     { id: crypto.randomUUID(), item_code: "" }
@@ -380,23 +380,25 @@ const handlePrintLabels = () => {
       return;
     }
 
-    const seed: Record<string, { qty: number; room: string }> = {};
+    const seed: Record<string, { qty: number; room: string; customRoom?: string }> = {};
     selectedProductsForCart.forEach((p) => {
       seed[p.id] = {
         qty: cartDrafts[p.id]?.qty ?? 1,
         room: cartDrafts[p.id]?.room ?? "None",
+        customRoom: cartDrafts[p.id]?.customRoom ?? "",
       };
     });
     setCartDrafts(seed);
     setIsAddToCartModalOpen(true);
   };
 
-  const updateCartDraft = (productId: string, patch: Partial<{ qty: number; room: string }>) => {
+  const updateCartDraft = (productId: string, patch: Partial<{ qty: number; room: string; customRoom?: string }>) => {
     setCartDrafts((prev) => ({
       ...prev,
       [productId]: {
         qty: prev[productId]?.qty ?? 1,
         room: prev[productId]?.room ?? "None",
+        customRoom: prev[productId]?.customRoom ?? "",
         ...patch,
       },
     }));
@@ -405,7 +407,7 @@ const handlePrintLabels = () => {
   const handleConfirmAddToCart = async () => {
     if (!onAddToCartFromInventory) return;
     const lines = selectedProductsForCart
-      .map((p) => ({ product: p, draft: cartDrafts[p.id] || { qty: 1, room: "None" } }))
+      .map((p) => ({ product: p, draft: cartDrafts[p.id] || { qty: 1, room: "None", customRoom: "" } }))
       .filter((row) => row.draft.qty > 0);
 
     if (lines.length === 0) {
@@ -419,11 +421,20 @@ const handlePrintLabels = () => {
       return;
     }
 
+    const customRoomError = lines.find(
+      ({ draft }) => draft.room === "Custom" && !(draft.customRoom || "").trim()
+    );
+    if (customRoomError) {
+      toast.error("Please enter custom room for selected item(s).");
+      return;
+    }
+
     let successCount = 0;
     let failCount = 0;
     for (const row of lines) {
       try {
-        await onAddToCartFromInventory(row.product, row.draft.qty, row.draft.room);
+        const resolvedRoom = row.draft.room === "Custom" ? (row.draft.customRoom || "").trim() : row.draft.room;
+        await onAddToCartFromInventory(row.product, row.draft.qty, resolvedRoom);
         successCount += 1;
       } catch {
         failCount += 1;
@@ -1209,7 +1220,7 @@ const handlePrintLabels = () => {
           </DialogHeader>
           <div className="max-h-[62vh] overflow-y-auto divide-y">
             {selectedProductsForCart.map((p) => {
-              const draft = cartDrafts[p.id] || { qty: 1, room: "None" };
+              const draft = cartDrafts[p.id] || { qty: 1, room: "None", customRoom: "" };
               const available = p.displayStock + p.godownStock;
               return (
                 <div key={p.id} className="px-5 py-4 bg-white space-y-3">
@@ -1246,23 +1257,64 @@ const handlePrintLabels = () => {
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] tracking-wide uppercase font-semibold text-slate-500">Assign Room</span>
                       <Badge variant="secondary" className="text-[10px] h-5 px-2">
-                        {draft.room}
+                        {draft.room === "Custom" ? (draft.customRoom?.trim() || "Custom") : draft.room}
                       </Badge>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {roomOptions.map((room) => (
-                        <button
-                          key={room}
-                          type="button"
-                          onClick={() => updateCartDraft(p.id, { room })}
-                          className={`px-2.5 py-1 rounded-full text-[11px] border transition-colors ${
-                            draft.room === room
-                              ? "bg-blue-600 text-white border-blue-600"
-                              : "bg-white text-slate-600 border-slate-300 hover:border-blue-300"
-                          }`}
-                        >
-                          {room}
-                        </button>
+                        room === "Custom" ? (
+                          <div
+                            key={room}
+                            className={`rounded-full border transition-colors ${
+                              draft.room === "Custom"
+                                ? "bg-blue-600 text-white border-blue-600"
+                                : "bg-white text-slate-600 border-slate-300 hover:border-blue-300"
+                            }`}
+                            onClick={() => {
+                              if (draft.room !== "Custom") {
+                                updateCartDraft(p.id, { room: "Custom", customRoom: "" });
+                              }
+                            }}
+                          >
+                            {draft.room === "Custom" ? (
+                              <input
+                                autoFocus
+                                placeholder="Custom..."
+                                value={draft.customRoom || ""}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) => updateCartDraft(p.id, { customRoom: e.target.value })}
+                                className="h-7 w-24 px-2.5 rounded-full bg-transparent text-[11px] text-white placeholder:text-blue-100 outline-none"
+                              />
+                            ) : (
+                              <button
+                                key={room}
+                                type="button"
+                                onClick={() => updateCartDraft(p.id, { room: "Custom", customRoom: "" })}
+                                className="px-2.5 py-1 rounded-full text-[11px]"
+                              >
+                                Custom
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <button
+                            key={room}
+                            type="button"
+                            onClick={() =>
+                              updateCartDraft(p.id, {
+                                room,
+                                customRoom: "",
+                              })
+                            }
+                            className={`px-2.5 py-1 rounded-full text-[11px] border transition-colors ${
+                              draft.room === room
+                                ? "bg-blue-600 text-white border-blue-600"
+                                : "bg-white text-slate-600 border-slate-300 hover:border-blue-300"
+                            }`}
+                          >
+                            {room}
+                          </button>
+                        )
                       ))}
                     </div>
                   </div>

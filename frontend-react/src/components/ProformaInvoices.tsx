@@ -499,11 +499,14 @@ export interface ProformaInvoice {
   subtotal?: number;
   paidAmount: number;
   discount_amount?: number;
+  extra_discount_amount?: number;
   discount_percent?: number;
   tax_percent?: number;
   tax_amount?: number;
   final_total?: number;
   total?: number;
+  write_off_amount?: number;
+  write_off_notes?: string;
   clientPhone?: string;        
   referralSource?: string; 
   deliveryAddress?: string; 
@@ -690,11 +693,14 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
   const discountPercent = pi.discount_percent ?? pi.discount ?? 0;
   const discountPercentDisplay = Number(discountPercent).toFixed(2);
   const discountAmount = pi.discount_amount ?? Math.floor(subtotal * discountPercent / 100);
-  const taxableAmount = Math.max(0, subtotal - discountAmount);
+  const extraDiscountAmount = pi.extra_discount_amount ?? 0;
+  const writeOffAmount = pi.write_off_amount ?? 0;
+  const taxableAmount = Math.max(0, subtotal - discountAmount - extraDiscountAmount);
   const taxPercent = pi.tax_percent ?? 0;
   const taxAmount = pi.tax_amount ?? Math.ceil(taxableAmount * taxPercent / 100);
   const finalTotal = pi.final_total ?? (taxableAmount + taxAmount);
-  const balanceDue = finalTotal - (pi.paidAmount || 0);
+  const paidAmount = Number(pi.paidAmount || 0);
+  const balanceDue = finalTotal - paidAmount - writeOffAmount;
   const docTitle = docType === "INVOICE" ? "Invoice" : "Proforma Invoice";
   const docPrefix = docType === "INVOICE" ? "INV" : "PI";
   const docNumber = pi.piNumber || `${docPrefix}-${String(pi.id).slice(0, 8).toUpperCase()}`;
@@ -760,10 +766,28 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
               <td style={{ padding: '14px 10px' }}>
                 <p style={{ fontWeight: '600', fontSize: '13px', margin: 0, color: '#0f172a', textTransform: 'uppercase' }}>{item.name}</p>
                 {item.category && <p style={{ fontSize: '10px', color: '#94a3b8', margin: '2px 0 0 0' }}>{item.category}</p>}
-                {item.attribute_metadata && item.attribute_metadata.length > 0 && (
+                {item.attribute_metadata &&
+                  item.attribute_metadata.filter((attr: any) => String(attr?.label || "").trim().toLowerCase() !== "none").length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px' }}>
-                    {item.attribute_metadata.map((attr: any, i: number) => (
-                      <span key={i} style={{ fontSize: '9px', backgroundColor: '#eff6ff', color: '#2563eb', padding: '2px 8px', borderRadius: '10px', fontWeight: '500' }}>{attr.label}: {attr.qty}</span>
+                    {item.attribute_metadata
+                      .filter((attr: any) => String(attr?.label || "").trim().toLowerCase() !== "none")
+                      .map((attr: any, i: number) => (
+                      <span
+                        key={i}
+                        style={{
+                          fontSize: '9px',
+                          backgroundColor: '#eff6ff',
+                          color: '#2563eb',
+                          padding: '2px 8px',
+                          borderRadius: '10px',
+                          fontWeight: '500',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          lineHeight: '1',
+                        }}
+                      >
+                        {attr.label}: {attr.qty}
+                      </span>
                     ))}
                   </div>
                 )}
@@ -788,6 +812,12 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
               <span style={{ fontWeight: '600' }}>−₹{discountAmount.toLocaleString('en-IN')}</span>
             </div>
           )}
+          {extraDiscountAmount > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: '13px', color: '#dc2626' }}>
+              <span>Extra Discount</span>
+              <span style={{ fontWeight: '600' }}>−₹{extraDiscountAmount.toLocaleString('en-IN')}</span>
+            </div>
+          )}
           {taxPercent > 0 && taxAmount > 0 && (
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: '13px', color: '#475569', borderBottom: '1px solid #e2e8f0' }}>
               <span>GST ({taxPercent}%)</span>
@@ -798,19 +828,23 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
             <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: '700', color: '#0f172a' }}>Grand Total</span>
             <span style={{ fontSize: '22px', fontWeight: '800', color: '#1e3a5f' }}>₹{finalTotal.toLocaleString('en-IN')}</span>
           </div>
-          {(pi.paidAmount || 0) > 0 && (
-            <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '12px', color: '#16a34a' }}>
-                <span>Paid</span>
-                <span style={{ fontWeight: '600' }}>₹{(pi.paidAmount || 0).toLocaleString('en-IN')}</span>
-              </div>
-              {balanceDue > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', fontSize: '13px', backgroundColor: '#fef2f2', borderRadius: '6px', color: '#b91c1c', fontWeight: '700' }}>
-                  <span>Balance Due</span>
-                  <span>₹{balanceDue.toLocaleString('en-IN')}</span>
-                </div>
-              )}
-            </>
+          {writeOffAmount > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '12px', color: '#dc2626' }}>
+              <span>Write-Off</span>
+              <span style={{ fontWeight: '600' }}>−₹{writeOffAmount.toLocaleString('en-IN')}</span>
+            </div>
+          )}
+          {paidAmount > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '12px', color: '#16a34a' }}>
+              <span>Paid</span>
+              <span style={{ fontWeight: '600' }}>₹{paidAmount.toLocaleString('en-IN')}</span>
+            </div>
+          )}
+          {balanceDue > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', fontSize: '13px', backgroundColor: '#fef2f2', borderRadius: '6px', color: '#b91c1c', fontWeight: '700' }}>
+              <span>Balance Due</span>
+              <span>₹{balanceDue.toLocaleString('en-IN')}</span>
+            </div>
           )}
         </div>
       </div>

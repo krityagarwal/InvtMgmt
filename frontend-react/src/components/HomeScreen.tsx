@@ -142,7 +142,7 @@
 // }
 
 import React from 'react';
-import { ShoppingCart, Package, ClipboardList, ScanLine, LogOut, Lightbulb, FileCheck } from 'lucide-react';
+import { ShoppingCart, Package, ClipboardList, ScanLine, LogOut, Lightbulb, FileCheck, History } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -158,6 +158,7 @@ export default function HomeScreen({ onNavigate, cartCount }: HomeScreenProps) {
     { id: 'cart', title: 'Active Carts', desc: 'Manage customer sessions', icon: ShoppingCart, color: 'bg-orange-50', iconColor: 'text-orange-600', hover: 'hover:border-orange-500', badge: cartCount },
     { id: 'orders', title: 'Order History', desc: 'View past sales & invoices', icon: ClipboardList, color: 'bg-purple-50', iconColor: 'text-purple-600', hover: 'hover:border-purple-500' },
     { id: 'proforma', title: 'Proforma', desc: 'Generate & edit quotes', icon: FileCheck, color: 'bg-rose-50', iconColor: 'text-rose-600', hover: 'hover:border-rose-500' },
+    { id: 'history', title: 'History', desc: 'Audit edits & activity log', icon: History, color: 'bg-slate-50', iconColor: 'text-slate-700', hover: 'hover:border-slate-500' },
   ];
 
   return (

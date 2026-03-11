@@ -382,17 +382,25 @@ export interface CartItem {
   attribute_metadata?: { label: string; qty: number }[];
 }
 
+interface RoomSplitDraft {
+  mode: "preset" | "custom";
+  label: string;
+  customLabel: string;
+  qty: number;
+}
+
 interface CartProps {
   items: CartItem[];
   products: Product[];
   clientName: string | null;
   discount: number;
+  extraDiscount?: number;
   activeCart: any;
   activeCartId: string | null;
   onUpdateQuantity: (id: string, quantity: number) => void;
   onRemoveItem: (id: string) => void;
   onUpdateDiscount: (discount: number) => void;
-  updateCartTax: (cartId: string | null, tax: number | "") => void;
+  onUpdateExtraDiscount: (amount: number) => void;
   onCheckout: () => void;
   onGeneratePI: () => void;
   onSaveCart: () => void;
@@ -400,97 +408,40 @@ interface CartProps {
   onUpdateAddress: (address: string) => void;
   onUpdatePhone: (phone: string) => void;
   onUpdateReferral: (referral: string) => void;
-  onPricingModeChange?: (mode: "discount" | "finalized") => void;
-  onFinalizedPriceChange?: (value: number | null) => void;
-  pricingModeDraft?: "discount" | "finalized";
-  finalTotalOverrideDraft?: number;
+  onUpdateItemRoom: (id: string, metadata: { label: string; qty: number }[]) => Promise<void> | void;
 }
 
 export function Cart({
-  items, products, clientName, discount, activeCart, activeCartId,
-  onUpdateQuantity, onRemoveItem, onUpdateDiscount, onCheckout,
-  onGeneratePI, onSaveCart, updateCartTax, onUpdateAdvance,
-  onUpdateAddress, onUpdatePhone, onUpdateReferral,
-  onPricingModeChange, onFinalizedPriceChange,
-  pricingModeDraft, finalTotalOverrideDraft,
+  items, products, clientName, discount, extraDiscount = 0, activeCart, activeCartId,
+  onUpdateQuantity, onRemoveItem, onUpdateDiscount, onUpdateExtraDiscount, onCheckout,
+  onGeneratePI, onSaveCart, onUpdateAdvance,
+  onUpdateAddress, onUpdatePhone, onUpdateReferral, onUpdateItemRoom,
 }: CartProps) {
   const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const [pricingMode, setPricingMode] = useState<"discount" | "finalized">("discount");
-  const [finalizedPriceInput, setFinalizedPriceInput] = useState<number | "">("");
   const [isFullPaid, setIsFullPaid] = useState(false);
-  const taxPercent = Number(activeCart?.tax ?? 0);
+  const [editingRoomItemId, setEditingRoomItemId] = useState<string | null>(null);
+  const [roomSplitDrafts, setRoomSplitDrafts] = useState<Record<string, RoomSplitDraft[]>>({});
+  const [selectedSplitIndexDrafts, setSelectedSplitIndexDrafts] = useState<Record<string, number>>({});
+  const [isSavingRoom, setIsSavingRoom] = useState(false);
+  const roomOptions = ["None", "Living Room", "Bedroom", "Kitchen", "Dining", "Outdoor"];
   const numericDiscount = Number(discount) || 0;
-  const discountAmount = Math.floor(subtotal * (numericDiscount / 100));
+  const baseDiscountAmount = Math.floor(subtotal * (numericDiscount / 100));
+  const numericExtraDiscount = Math.max(0, Math.floor(Number(extraDiscount) || 0));
+  const maxExtraDiscount = Math.max(0, Math.floor(subtotal) - baseDiscountAmount);
+  const effectiveExtraDiscount = Math.min(numericExtraDiscount, maxExtraDiscount);
+  const discountAmount = baseDiscountAmount + effectiveExtraDiscount;
   const taxableAmount = Math.max(0, subtotal - discountAmount);
-  const tax = Math.ceil(taxableAmount * (taxPercent / 100));
-  const negotiatedTotal = taxableAmount + tax;
-  const finalizedAmount =
-    pricingMode === "discount"
-      ? negotiatedTotal
-      : (finalizedPriceInput === "" ? negotiatedTotal : Number(finalizedPriceInput));
-  const displayTotal =
-    pricingMode === "finalized" && finalizedPriceInput !== ""
-      ? Number(finalizedPriceInput)
-      : negotiatedTotal;
-
-  const calculateDiscountFromFinalized = (targetFinal: number, baseSubtotal: number, currentTaxPercent: number) => {
-    const subtotalInt = Math.max(0, Math.round(baseSubtotal));
-    const targetInt = Math.max(0, Math.round(targetFinal));
-    if (subtotalInt <= 0) return 0;
-
-    let bestDiscountAmount = 0;
-    let minDiff = Number.POSITIVE_INFINITY;
-
-    for (let discountAmt = 0; discountAmt <= subtotalInt; discountAmt += 1) {
-      const taxable = subtotalInt - discountAmt;
-      const taxAmt = Math.ceil(taxable * (currentTaxPercent / 100));
-      const computedFinal = taxable + taxAmt;
-      const diff = Math.abs(computedFinal - targetInt);
-
-      if (diff < minDiff || (diff === minDiff && discountAmt > bestDiscountAmount)) {
-        minDiff = diff;
-        bestDiscountAmount = discountAmt;
-      }
-      if (diff === 0) break;
-    }
-
-    const percent = (bestDiscountAmount * 100) / subtotalInt;
-    return Math.min(100, Math.max(0, Number(percent.toFixed(6))));
-  };
-
-  useEffect(() => {
-    if (pricingMode !== "finalized") return;
-    if (finalizedPriceInput === "") return;
-    const finalizedPrice = Number(finalizedPriceInput) || 0;
-    const nextDiscount = calculateDiscountFromFinalized(finalizedPrice, subtotal, taxPercent);
-    if (Math.abs(nextDiscount - numericDiscount) > 0.01) {
-      onUpdateDiscount(nextDiscount);
-    }
-  }, [pricingMode, finalizedPriceInput, subtotal, taxPercent, numericDiscount]);
-
-  useEffect(() => {
-    onPricingModeChange?.(pricingMode);
-  }, [pricingMode, onPricingModeChange]);
-
-  useEffect(() => {
-    if (pricingMode !== "finalized" || finalizedPriceInput === "") {
-      onFinalizedPriceChange?.(null);
-      return;
-    }
-    onFinalizedPriceChange?.(Number(finalizedPriceInput));
-  }, [pricingMode, finalizedPriceInput, onFinalizedPriceChange]);
+  const negotiatedTotal = taxableAmount;
+  const finalizedAmount = negotiatedTotal;
+  const displayTotal = negotiatedTotal;
 
   useEffect(() => {
     if (!activeCartId) return;
-    const nextMode = pricingModeDraft ?? "discount";
-    setPricingMode(nextMode);
-    if (nextMode === "finalized" && finalTotalOverrideDraft !== undefined) {
-      setFinalizedPriceInput(Number(finalTotalOverrideDraft));
-    } else {
-      setFinalizedPriceInput(Number(negotiatedTotal.toFixed(2)));
-    }
     setIsFullPaid(false);
-  }, [activeCartId, pricingModeDraft, finalTotalOverrideDraft, negotiatedTotal]);
+    setEditingRoomItemId(null);
+    setRoomSplitDrafts({});
+    setSelectedSplitIndexDrafts({});
+  }, [activeCartId]);
 
   useEffect(() => {
     if (!isFullPaid) return;
@@ -506,6 +457,93 @@ export function Cart({
     const available = master ? Number(master.godownStock || 0) + Number(master.displayStock || 0) : 0;
     return item.quantity > available;
   });
+
+  const buildInitialSplits = (item: CartItem): RoomSplitDraft[] => {
+    const attrs = (item.attribute_metadata || []).filter((a) => Number(a.qty) > 0);
+    if (attrs.length === 0) {
+      return [{ mode: "preset", label: "None", customLabel: "", qty: item.quantity }];
+    }
+    return attrs.map((a) => {
+      const label = a.label || "None";
+      const isPreset = roomOptions.includes(label);
+      return {
+        mode: isPreset ? "preset" : "custom",
+        label: isPreset ? label : "Custom",
+        customLabel: isPreset ? "" : label,
+        qty: Number(a.qty) || 0,
+      };
+    });
+  };
+
+  const openRoomEditor = (item: CartItem) => {
+    setEditingRoomItemId(item.id);
+    setRoomSplitDrafts((prev) => ({ ...prev, [item.id]: buildInitialSplits(item) }));
+    setSelectedSplitIndexDrafts((prev) => ({ ...prev, [item.id]: 0 }));
+  };
+
+  const updateSplitRow = (itemId: string, idx: number, patch: Partial<RoomSplitDraft>) => {
+    setRoomSplitDrafts((prev) => ({
+      ...prev,
+      [itemId]: (prev[itemId] || []).map((row, i) => (i === idx ? { ...row, ...patch } : row)),
+    }));
+  };
+
+  const addSplitRow = (itemId: string) => {
+    let nextIndex = 0;
+    setRoomSplitDrafts((prev) => ({
+      ...prev,
+      [itemId]: (() => {
+        const rows = [...(prev[itemId] || []), { mode: "preset", label: "None", customLabel: "", qty: 0 }];
+        nextIndex = rows.length - 1;
+        return rows;
+      })(),
+    }));
+    setSelectedSplitIndexDrafts((prev) => ({
+      ...prev,
+      [itemId]: nextIndex,
+    }));
+  };
+
+  const removeSplitRow = (itemId: string, idx: number) => {
+    let nextIndex = 0;
+    setRoomSplitDrafts((prev) => {
+      const nextRows = (prev[itemId] || []).filter((_, i) => i !== idx);
+      const current = selectedSplitIndexDrafts[itemId] || 0;
+      nextIndex = Math.min(Math.max(0, current === idx ? current - 1 : current), Math.max(0, nextRows.length - 1));
+      return { ...prev, [itemId]: nextRows };
+    });
+    setSelectedSplitIndexDrafts((prev) => {
+      return {
+        ...prev,
+        [itemId]: nextIndex,
+      };
+    });
+  };
+
+  const saveItemRoomSplit = async (item: CartItem) => {
+    const itemId = item.id;
+    const splits = roomSplitDrafts[itemId] || [];
+    const normalized = splits
+      .map((row) => {
+        const label = row.mode === "custom" ? (row.customLabel || "").trim() : row.label;
+        const qty = Math.max(0, Math.floor(Number(row.qty) || 0));
+        return { label, qty };
+      })
+      .filter((row) => row.qty > 0);
+
+    const hasInvalidLabel = normalized.some((row) => !row.label);
+    if (hasInvalidLabel) return;
+    const sumQty = normalized.reduce((sum, row) => sum + row.qty, 0);
+    if (sumQty !== item.quantity) return;
+
+    try {
+      setIsSavingRoom(true);
+      await onUpdateItemRoom(itemId, normalized);
+      setEditingRoomItemId(null);
+    } finally {
+      setIsSavingRoom(false);
+    }
+  };
 
   if (!clientName) {
     return (
@@ -600,18 +638,163 @@ export function Cart({
                 </div>
               </div>
 
-              {(item.attribute_metadata?.length || isOverStock) ? (
-                <div className="mt-1.5 flex items-center justify-between gap-2">
-                  <div className="flex flex-wrap gap-0.5">
-                    {item.attribute_metadata?.map((attr, idx) => (
-                      <span key={idx} className="bg-blue-50 text-blue-700 text-[8px] px-1 py-0.5 rounded border border-blue-100">
-                        {attr.label}: {attr.qty}
-                      </span>
-                    ))}
-                  </div>
-                  {isOverStock && <p className="text-[9px] font-bold text-red-500 italic uppercase whitespace-nowrap">Low Stock ({available})</p>}
+              <div className="mt-1.5 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  {editingRoomItemId === item.id ? (
+                    <div className="space-y-1.5 border rounded-md p-1.5 bg-slate-50">
+                      <div className="flex flex-wrap items-center gap-1">
+                        {(roomSplitDrafts[item.id] || []).map((row, idx) => {
+                          const label = row.mode === "custom" ? (row.customLabel || "Custom") : row.label;
+                          const active = (selectedSplitIndexDrafts[item.id] || 0) === idx;
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              className={`px-2 py-0.5 rounded-full text-[10px] border ${
+                                active ? "bg-blue-600 text-white border-blue-600" : "bg-white text-slate-600 border-slate-300"
+                              }`}
+                              onClick={() =>
+                                setSelectedSplitIndexDrafts((prev) => ({ ...prev, [item.id]: idx }))
+                              }
+                            >
+                              {label}:{row.qty}
+                            </button>
+                          );
+                        })}
+                        <button
+                          type="button"
+                          className="px-2 py-0.5 rounded-full text-[10px] border bg-white text-blue-700 border-blue-200"
+                          onClick={() => addSplitRow(item.id)}
+                        >
+                          + Room
+                        </button>
+                      </div>
+
+                      {(() => {
+                        const selectedIdx = selectedSplitIndexDrafts[item.id] || 0;
+                        const row = (roomSplitDrafts[item.id] || [])[selectedIdx];
+                        if (!row) return null;
+                        return (
+                          <div className="flex flex-wrap items-center gap-1">
+                            {roomOptions.map((opt) => (
+                              <button
+                                key={opt}
+                                type="button"
+                                className={`px-2 py-0.5 rounded-full text-[10px] border ${
+                                  row.mode === "preset" && row.label === opt
+                                    ? "bg-blue-600 text-white border-blue-600"
+                                    : "bg-white text-slate-600 border-slate-300"
+                                }`}
+                                onClick={() => updateSplitRow(item.id, selectedIdx, { mode: "preset", label: opt, customLabel: "" })}
+                              >
+                                {opt}
+                              </button>
+                            ))}
+                            <button
+                              type="button"
+                              className={`px-2 py-0.5 rounded-full text-[10px] border ${
+                                row.mode === "custom"
+                                  ? "bg-blue-600 text-white border-blue-600"
+                                  : "bg-white text-slate-600 border-slate-300"
+                              }`}
+                              onClick={() => updateSplitRow(item.id, selectedIdx, { mode: "custom", label: "Custom" })}
+                            >
+                              {row.mode === "custom" ? (
+                                <input
+                                  autoFocus
+                                  placeholder="Custom..."
+                                  value={row.customLabel}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={(e) => updateSplitRow(item.id, selectedIdx, { customLabel: e.target.value })}
+                                  className="h-4 w-20 bg-transparent text-[10px] text-white placeholder:text-blue-100 outline-none"
+                                />
+                              ) : (
+                                "Custom"
+                              )}
+                            </button>
+                            <div className="inline-flex items-center border rounded">
+                              <button
+                                type="button"
+                                className="h-5 w-5 text-[10px]"
+                                onClick={() => updateSplitRow(item.id, selectedIdx, { qty: Math.max(0, row.qty - 1) })}
+                              >
+                                -
+                              </button>
+                              <input
+                                type="number"
+                                min={0}
+                                className="h-5 w-10 text-[10px] text-center border-x outline-none"
+                                value={row.qty}
+                                onChange={(e) => updateSplitRow(item.id, selectedIdx, { qty: Math.max(0, Number(e.target.value) || 0) })}
+                              />
+                              <button
+                                type="button"
+                                className="h-5 w-5 text-[10px]"
+                                onClick={() => updateSplitRow(item.id, selectedIdx, { qty: row.qty + 1 })}
+                              >
+                                +
+                              </button>
+                            </div>
+                            {(roomSplitDrafts[item.id] || []).length > 1 && (
+                              <button
+                                type="button"
+                                className="text-[10px] text-red-500 px-1"
+                                onClick={() => removeSplitRow(item.id, selectedIdx)}
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-slate-500">
+                          {(roomSplitDrafts[item.id] || []).reduce((sum, row) => sum + (Number(row.qty) || 0), 0)}/{item.quantity}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            className="text-[10px] text-slate-500"
+                            onClick={() => setEditingRoomItemId(null)}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="text-[10px] text-blue-700 font-semibold disabled:text-slate-400"
+                            disabled={
+                              isSavingRoom ||
+                              (roomSplitDrafts[item.id] || []).length === 0 ||
+                              (roomSplitDrafts[item.id] || []).some((r) => r.qty > 0 && r.mode === "custom" && !r.customLabel.trim()) ||
+                              (roomSplitDrafts[item.id] || []).reduce((sum, r) => sum + (Number(r.qty) || 0), 0) !== item.quantity
+                            }
+                            onClick={() => saveItemRoomSplit(item)}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="flex flex-wrap items-center gap-1 px-1.5 py-1 rounded-full text-[10px] border bg-blue-50 text-blue-700 border-blue-100"
+                      onClick={() => openRoomEditor(item)}
+                    >
+                      {(item.attribute_metadata && item.attribute_metadata.length > 0
+                        ? item.attribute_metadata
+                        : [{ label: "None", qty: item.quantity }]
+                      ).map((attr, idx) => (
+                        <span key={idx} className="px-1.5 py-0.5 rounded-full bg-white border border-blue-100">
+                          {attr.label}:{attr.qty}
+                        </span>
+                      ))}
+                    </button>
+                  )}
                 </div>
-              ) : null}
+                {isOverStock && <p className="text-[9px] font-bold text-red-500 italic uppercase whitespace-nowrap">Low Stock ({available})</p>}
+              </div>
             </div>
           );
         })}
@@ -626,116 +809,40 @@ export function Cart({
 
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Pricing Mode</span>
-          </div>
-          <div className="inline-flex rounded-md border border-slate-300 overflow-hidden">
-            <button
-              type="button"
-              onClick={() => {
-                setPricingMode("discount");
-                setFinalizedPriceInput("");
-                onUpdateDiscount(0);
-                setIsFullPaid(false);
-                onUpdateAdvance(0);
-              }}
-              className={`px-2 py-1 text-[10px] font-bold uppercase ${
-                pricingMode === "discount" ? "bg-blue-600 text-white" : "bg-white text-slate-600"
-              }`}
-            >
-              Enter Discount %
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setPricingMode("finalized");
-                setFinalizedPriceInput("");
-                onUpdateDiscount(0);
-                setIsFullPaid(false);
-                onUpdateAdvance(0);
-              }}
-              className={`px-2 py-1 text-[10px] font-bold uppercase ${
-                pricingMode === "finalized" ? "bg-blue-600 text-white" : "bg-white text-slate-600"
-              }`}
-            >
-              Enter Final Price
-            </button>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Tax</span>
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Discount</span>
             <input
-              type="number" 
-              value={taxPercent}
+              type="number"
+              value={discount}
               onChange={(e) => {
-                const nextTax = Number(e.target.value);
-                updateCartTax(activeCartId, nextTax);
                 setIsFullPaid(false);
                 onUpdateAdvance(0);
-                if (pricingMode === "finalized" && finalizedPriceInput !== "") {
-                  onUpdateDiscount(calculateDiscountFromFinalized(Number(finalizedPriceInput) || 0, subtotal, nextTax));
-                }
+                onUpdateDiscount(parseFloat(e.target.value) || 0);
               }}
               onFocus={(e) => e.currentTarget.select()}
               className="w-12 h-6 text-[11px] text-center font-bold border border-slate-200 rounded bg-white outline-none focus:border-blue-400 transition-colors"
             />
             <span className="text-[11px] font-bold text-slate-400">%</span>
           </div>
-          <span className="font-bold text-slate-600 font-mono text-[11px]">₹{tax.toLocaleString()}</span>
+          <span className="font-bold text-slate-600 font-mono text-[11px]">₹{baseDiscountAmount.toLocaleString()}</span>
         </div>
 
-        {pricingMode === "discount" ? (
-          <div className="flex items-center justify-between bg-white rounded-lg px-2 py-1.5 border border-slate-200">
-            <div className="leading-tight">
-              <p className="text-[9px] font-black text-slate-700 uppercase">Discount %</p>
-            </div>
-            <div className="flex items-center gap-1">
-              <input
-                type="number"
-                value={discount || ""}
-                placeholder="0"
-                onChange={(e) => {
-                  setIsFullPaid(false);
-                  onUpdateAdvance(0);
-                  onUpdateDiscount(parseFloat(e.target.value) || 0);
-                }}
-                onFocus={(e) => e.currentTarget.select()}
-                className="w-20 h-7 text-right text-xs font-black border border-slate-300 rounded bg-white outline-none focus:border-blue-400"
-              />
-              <span className="text-[11px] font-bold text-slate-400">%</span>
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-center justify-between bg-white rounded-lg px-2 py-1.5 border border-slate-200">
-            <div className="leading-tight">
-              <p className="text-[9px] font-black text-slate-700 uppercase">Final Negotiated Price</p>
-            </div>
-            <Input
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Extra Discount</span>
+            <span className="text-[11px] font-bold text-slate-400">₹</span>
+            <input
               type="number"
-              value={finalizedPriceInput}
-              placeholder="Finalized"
-              className="w-24 h-7 text-right font-black text-xs bg-white border-slate-300"
-              onFocus={(e) => e.currentTarget.select()}
+              value={effectiveExtraDiscount}
               onChange={(e) => {
-                const raw = e.target.value;
-                if (raw === "") {
-                  setFinalizedPriceInput("");
-                  setIsFullPaid(false);
-                  onUpdateAdvance(0);
-                  return;
-                }
                 setIsFullPaid(false);
                 onUpdateAdvance(0);
-                setFinalizedPriceInput(parseFloat(raw) || 0);
+                onUpdateExtraDiscount(Math.max(0, Math.floor(Number(e.target.value) || 0)));
               }}
+              onFocus={(e) => e.currentTarget.select()}
+              className="w-16 h-6 text-[11px] text-center font-bold border border-slate-200 rounded bg-white outline-none focus:border-blue-400 transition-colors"
             />
           </div>
-        )}
-
-        <div className="flex justify-between items-center text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
-          <span className="font-bold uppercase tracking-wide">Savings</span>
-          <span className="font-bold font-mono">₹{discountAmount.toLocaleString()} ({numericDiscount.toFixed(2)}%)</span>
+          <span className="font-bold text-slate-600 font-mono text-[11px]">₹{effectiveExtraDiscount.toLocaleString()}</span>
         </div>
 
         <div className="pt-2 border-t-2 border-dashed flex justify-between items-center">

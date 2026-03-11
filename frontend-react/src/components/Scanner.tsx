@@ -149,6 +149,7 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
   const [quantity, setQuantity] = useState(1);
   const [selectedAttribute, setSelectedAttribute] = useState<string>("None");
   const [customAttribute, setCustomAttribute] = useState("");
+  const roomOptions = ["None", "Living Room", "Bedroom", "Kitchen", "Dining", "Outdoor", "Custom"];
 
   // DEBUG LOG: Track every render of the quantity
   console.log("[Scanner Render] Current Quantity State:", quantity);
@@ -187,6 +188,7 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
       onProductSearch(targetCode);
       // Reset room to None for new search
       setSelectedAttribute("None");
+      setCustomAttribute("");
     }
   };
 
@@ -279,22 +281,64 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black text-blue-400 uppercase tracking-widest">Assign to Room</span>
                 <Badge variant="secondary" className="text-[9px] bg-blue-100 text-blue-700 border-none font-bold uppercase px-2">
-                  {selectedAttribute}
+                  {selectedAttribute === "Custom" ? (customAttribute.trim() || "Custom") : selectedAttribute}
                 </Badge>
               </div>
               <div className="flex flex-wrap gap-2">
-                {["None", "Living Room", "Bedroom", "Kitchen", "Dining", "Outdoor"].map((room) => (
-                  <button
-                    key={room}
-                    onClick={() => setSelectedAttribute(room)}
-                    className={`px-3 py-1.5 rounded-full text-[10px] font-bold border transition-all ${
-                      selectedAttribute === room 
-                        ? "bg-blue-600 text-white border-blue-600 shadow-md" 
-                        : "bg-white text-gray-500 border-gray-200 hover:border-blue-300"
-                    }`}
-                  >
-                    {room}
-                  </button>
+                {roomOptions.map((room) => (
+                  room === "Custom" ? (
+                    <div
+                      key={room}
+                      className={`rounded-full border transition-all ${
+                        selectedAttribute === "Custom"
+                          ? "bg-blue-600 text-white border-blue-600 shadow-md"
+                          : "bg-white text-gray-500 border-gray-200 hover:border-blue-300"
+                      }`}
+                      onClick={() => {
+                        if (selectedAttribute !== "Custom") {
+                          setSelectedAttribute("Custom");
+                          setCustomAttribute("");
+                        }
+                      }}
+                    >
+                      {selectedAttribute === "Custom" ? (
+                        <input
+                          autoFocus
+                          placeholder="Custom..."
+                          value={customAttribute}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setCustomAttribute(e.target.value)}
+                          className="h-7 w-24 px-3 rounded-full bg-transparent text-[10px] font-bold text-white placeholder:text-blue-100 outline-none"
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedAttribute("Custom");
+                            setCustomAttribute("");
+                          }}
+                          className="px-3 py-1.5 rounded-full text-[10px] font-bold"
+                        >
+                          Custom
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      key={room}
+                      onClick={() => {
+                        setSelectedAttribute(room);
+                        setCustomAttribute("");
+                      }}
+                      className={`px-3 py-1.5 rounded-full text-[10px] font-bold border transition-all ${
+                        selectedAttribute === room 
+                          ? "bg-blue-600 text-white border-blue-600 shadow-md" 
+                          : "bg-white text-gray-500 border-gray-200 hover:border-blue-300"
+                      }`}
+                    >
+                      {room}
+                    </button>
+                  )
                 ))}
               </div>
             </div>
@@ -355,8 +399,16 @@ export function Scanner({ products, onAddToCart, onProductSearch, searchResult }
 
               {/* Add to Cart */}
               <Button
-                disabled={!searchResult}
-                onClick={() => searchResult && onAddToCart(searchResult, quantity, selectedAttribute)}
+                disabled={!searchResult || (selectedAttribute === "Custom" && !customAttribute.trim())}
+                onClick={() => {
+                  if (!searchResult) return;
+                  const resolvedRoom =
+                    selectedAttribute === "Custom"
+                      ? customAttribute.trim()
+                      : selectedAttribute;
+                  if (!resolvedRoom) return;
+                  onAddToCart(searchResult, quantity, resolvedRoom);
+                }}
                 className="
                   bg-blue-600 hover:bg-blue-700
                   w-full sm:w-auto sm:min-w-[180px]
