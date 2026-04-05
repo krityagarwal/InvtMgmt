@@ -754,7 +754,11 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
         </thead>
         <tbody>
           {pi.items?.map((item: any, idx: number) => (
-            <tr key={idx} style={{ backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f8fafc', borderBottom: '1px solid #f1f5f9' }}>
+            <tr
+              key={idx}
+              data-pi-item-row="true"
+              style={{ backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f8fafc', borderBottom: '1px solid #f1f5f9' }}
+            >
               <td style={{ padding: '14px 10px', color: '#94a3b8', fontWeight: '500' }}>{String(idx + 1).padStart(2, '0')}</td>
               <td style={{ padding: '14px 10px' }}>
                 <div style={{ width: '64px', height: '64px', border: '1px solid #e2e8f0', borderRadius: '6px', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc' }}>

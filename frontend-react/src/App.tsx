@@ -886,11 +886,90 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       backgroundColor: "#ffffff",
       imageTimeout: 15000,
     });
-    const imgData = canvas.toDataURL("image/png");
     const pdf = new jsPDF("p", "mm", "a4");
     const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-    pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
+    const pdfHeight = pdf.internal.pageSize.getHeight();
+    const topMarginMm = 10;
+    const bottomMarginMm = 10;
+
+    const firstPageHeightMm = Math.max(0, pdfHeight - bottomMarginMm);
+    const otherPageHeightMm = Math.max(0, pdfHeight - topMarginMm - bottomMarginMm);
+
+    const firstPageHeightPx = Math.floor((canvas.width * firstPageHeightMm) / pdfWidth);
+    const otherPageHeightPx = Math.floor((canvas.width * otherPageHeightMm) / pdfWidth);
+
+    const pageCanvas = document.createElement("canvas");
+    const pageCtx = pageCanvas.getContext("2d");
+    if (!pageCtx) throw new Error("Canvas context unavailable");
+
+    pageCanvas.width = canvas.width;
+
+    const elementHeight = element.scrollHeight || element.getBoundingClientRect().height || canvas.height;
+    const scale = canvas.height / elementHeight;
+    const firstPageHeightDom = firstPageHeightPx / scale;
+    const otherPageHeightDom = otherPageHeightPx / scale;
+
+    const rowElements = Array.from(
+      element.querySelectorAll<HTMLElement>('[data-pi-item-row="true"]')
+    );
+    const elementRect = element.getBoundingClientRect();
+    const rowBlocks = rowElements.map((row) => {
+      const rect = row.getBoundingClientRect();
+      const top = rect.top - elementRect.top;
+      const height = rect.height;
+      return { top, bottom: top + height, height };
+    });
+
+    const breaksDom: number[] = [];
+    let currentPageStart = 0;
+    let currentPageLimit = firstPageHeightDom;
+    for (const row of rowBlocks) {
+      if (row.bottom - currentPageStart > currentPageLimit && row.top > currentPageStart) {
+        breaksDom.push(row.top);
+        currentPageStart = row.top;
+        currentPageLimit = otherPageHeightDom;
+      } else if (row.height > currentPageLimit) {
+        // Row is taller than a page; allow split at page height to avoid infinite loop
+        breaksDom.push(currentPageStart + currentPageLimit);
+        currentPageStart = currentPageStart + currentPageLimit;
+        currentPageLimit = otherPageHeightDom;
+      }
+    }
+
+    const pageStartsDom = [0, ...breaksDom];
+    const pageEndsDom = [...breaksDom, elementHeight];
+
+    for (let pageIndex = 0; pageIndex < pageStartsDom.length; pageIndex += 1) {
+      const isFirstPage = pageIndex === 0;
+      const startDom = pageStartsDom[pageIndex];
+      const endDom = pageEndsDom[pageIndex];
+      const sliceHeightDom = Math.max(0, endDom - startDom);
+      const sourceY = Math.floor(startDom * scale);
+      const sliceHeight = Math.min(canvas.height - sourceY, Math.floor(sliceHeightDom * scale));
+
+      if (pageIndex > 0) {
+        pdf.addPage();
+      }
+
+      pageCanvas.height = sliceHeight;
+      pageCtx.clearRect(0, 0, pageCanvas.width, sliceHeight);
+      pageCtx.drawImage(
+        canvas,
+        0,
+        sourceY,
+        canvas.width,
+        sliceHeight,
+        0,
+        0,
+        canvas.width,
+        sliceHeight
+      );
+
+      const imgData = pageCanvas.toDataURL("image/png");
+      const imgHeightMm = (sliceHeight * pdfWidth) / canvas.width;
+      const yMm = isFirstPage ? 0 : topMarginMm;
+      pdf.addImage(imgData, "PNG", 0, yMm, pdfWidth, imgHeightMm);
+    }
     return pdf;
   };
 
