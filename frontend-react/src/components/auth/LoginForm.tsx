@@ -13,41 +13,33 @@ export default function LoginForm() {
 
   // Check if the user reached this page via an invite link
   useEffect(() => {
-    // 1. Get the hash directly from the window
     const hash = window.location.hash;
-    
-    // 2. Log it to your console to debug (Remove this after it works)
-    console.log("Current URL Hash:", hash);
-    // DEBUG: Check if the client is actually initialized
-    console.log("Supabase URL:", import.meta.env.VITE_SUPABASE_URL);
-    console.log("Attempting login for:", email);
-
-    // 3. Check for the keywords Supabase sends
     if (hash && (hash.includes('type=invite') || hash.includes('type=recovery') || hash.includes('type=signup'))) {
-        setIsNewUser(true);
+      setIsNewUser(true);
     }
   }, []);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Now this ONLY runs when you click 'Sign In'
-    console.log("--- Login Attempt Start ---");
-    console.log("Connecting to:", import.meta.env.VITE_SUPABASE_URL);
-    console.log("User Email:", email);
+    setLoading(true);
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password: password,
-    });
-
-    if (error) {
-        console.error("Login Result: FAILED", error.message);
-        alert(error.message);
-    } else {
-        console.log("Login Result: SUCCESS", data.user?.id);
+    try {
+      if (isNewUser) {
+        const { error } = await supabase.auth.updateUser({ password });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+        if (error) throw error;
+      }
+    } catch (error: any) {
+      alert(error?.message || "Authentication failed");
+    } finally {
+      setLoading(false);
     }
-    };
+  };
 
 //   const handleAuth = async (e: React.FormEvent) => {
 //     e.preventDefault();

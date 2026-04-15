@@ -37,6 +37,7 @@ interface InventoryProps {
   products: ExtendedProduct[];
   onUpdateInventory: (updatedProduct: any) => Promise<void>;
   onBulkAdd: (newItems: any[]) => Promise<void>;
+  onGenerateCatalogPdf?: (catalogProducts: ExtendedProduct[], filterLabel: string) => Promise<void> | void;
   onAddToCartFromInventory?: (product: ExtendedProduct, quantity: number, room: string) => Promise<void>;
   activeCartId?: string | null;
   activeCartLabel?: string | null;
@@ -48,10 +49,18 @@ interface CategoryOption {
   name: string;
 }
 
+const isRenderableImageUrl = (url?: string | null) =>
+  !!url &&
+  (url.startsWith("http://") ||
+    url.startsWith("https://") ||
+    url.startsWith("data:image/") ||
+    url.startsWith("blob:"));
+
 export function Inventory({
   products,
   onUpdateInventory,
   onBulkAdd,
+  onGenerateCatalogPdf,
   onAddToCartFromInventory,
   activeCartId,
   activeCartLabel,
@@ -184,6 +193,28 @@ React.useEffect(() => {
 
     return sorted;
   }, [filteredProducts, priceSort]);
+
+  const getCatalogFilterLabel = () => {
+    const parts: string[] = [];
+
+    if (searchTerm.trim()) {
+      parts.push(`search-${searchTerm.trim()}`);
+    }
+    if (filterCategory !== "all") {
+      parts.push(`${filterCategory}`);
+    }
+    if (filters.vendor !== "all") {
+      parts.push(`vendor-${filters.vendor}`);
+    }
+    if (filters.displayQty.operator !== "any" && filters.displayQty.value !== "") {
+      parts.push(`display-${filters.displayQty.operator}-${filters.displayQty.value}`);
+    }
+    if (filters.godownQty.operator !== "any" && filters.godownQty.value !== "") {
+      parts.push(`godown-${filters.godownQty.operator}-${filters.godownQty.value}`);
+    }
+
+    return parts.length > 0 ? parts.join("_") : "all";
+  };
 
   const handlePriceSort = (field: "cost_price" | "overhead_expense" | "selling_price") => {
     setPriceSort((prev) => {
@@ -509,6 +540,12 @@ const handlePrintLabels = () => {
                 <Plus className="mr-2 size-4" /> 
                 Bulk Add
               </Button>
+              <Button
+                variant="outline"
+                onClick={() => onGenerateCatalogPdf?.(sortedProducts, getCatalogFilterLabel())}
+              >
+                Catalog PDF
+              </Button>
             </div>
           </div>
          <div className="flex flex-wrap gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg items-end">
@@ -683,6 +720,7 @@ const handlePrintLabels = () => {
                     const isEditing = editingId === product.id;
                     // Use buffer values if editing, otherwise use original product data
                     const data = isEditing ? editBuffer : product;
+                    const resolvedPhotoUrl = isRenderableImageUrl(data?.photo_url) ? data.photo_url : "";
                     return (
                       <TableRow 
                         key={product.id} 
@@ -695,15 +733,15 @@ const handlePrintLabels = () => {
                         {/* IMAGE: With edit overlay if active */}
                         <TableCell>
                           <div
-                            className={`relative size-10 border rounded overflow-hidden group ${data.photo_url ? "cursor-zoom-in" : ""}`}
+                            className={`relative size-10 border rounded overflow-hidden group ${resolvedPhotoUrl ? "cursor-zoom-in" : ""}`}
                             onClick={() => {
-                              if (!isEditing && data.photo_url) {
-                                setSelectedImage(data.photo_url);
+                              if (!isEditing && resolvedPhotoUrl) {
+                                setSelectedImage(resolvedPhotoUrl);
                               }
                             }}
                           >
-                            {data.photo_url ? (
-                              <img src={data.photo_url} alt={data.barcode} className="size-full object-contain" />
+                            {resolvedPhotoUrl ? (
+                              <img src={resolvedPhotoUrl} alt={data.barcode} className="size-full object-contain" />
                             ) : (
                               <div className="size-full flex items-center justify-center bg-gray-50 text-[10px] text-gray-400">No Img</div>
                             )}
@@ -1222,13 +1260,14 @@ const handlePrintLabels = () => {
             {selectedProductsForCart.map((p) => {
               const draft = cartDrafts[p.id] || { qty: 1, room: "None", customRoom: "" };
               const available = p.displayStock + p.godownStock;
+              const safePhotoUrl = isRenderableImageUrl(p.photo_url) ? p.photo_url : "";
               return (
                 <div key={p.id} className="px-5 py-4 bg-white space-y-3">
                   <div className="flex items-start gap-3">
                     <div className="size-16 min-w-16 rounded-md border bg-slate-50 overflow-hidden flex items-center justify-center">
-                      {p.photo_url ? (
+                      {safePhotoUrl ? (
                         <img
-                          src={p.photo_url}
+                          src={safePhotoUrl}
                           alt={p.name}
                           className="size-full object-cover"
                           onError={(e) => {

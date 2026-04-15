@@ -34,6 +34,12 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000
 type View = "home" | "scanner" | "inventory" | "orders" | "cart" | "proforma" | "history" | "login";
 
 export default function App() {
+  const isRenderableImageUrl = (url?: string | null) =>
+    !!url &&
+    (url.startsWith("http://") ||
+      url.startsWith("https://") ||
+      url.startsWith("data:image/") ||
+      url.startsWith("blob:"));
   const [clientCarts, setClientCarts] = useState<ClientCart[]>([]);
   const [activeCartId, setActiveCartId] = useState<string | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -109,27 +115,11 @@ export default function App() {
 
   const viewRef = useRef(currentView);
 
-  // 1. Monitor View changes
-useEffect(() => {
-  console.log("🚩 VIEW CHANGED TO:", currentView);
-  // This will tell us if a piece of code is manually calling setCurrentView('home')
-}, [currentView]);
-
 useEffect(() => {
   if (currentView === "history") {
     handleLoadAuditEvents(auditEntityType);
   }
 }, [currentView]);
-
-// 2. Monitor Auth State Changes
-useEffect(() => {
-  console.log("🔐 SESSION STATE:", session ? "Logged In" : "Logged Out");
-}, [session]);
-
-// 3. Monitor the Bootstrap Ref
-useEffect(() => {
-  console.log("⚙️ BOOTSTRAP DONE REF:", bootstrapDoneRef.current);
-}, [bootstrapDoneRef.current]);
 
 //chatgpt
 useEffect(() => {
@@ -149,7 +139,6 @@ useEffect(() => {
   const { data: { subscription } } =
     supabase.auth.onAuthStateChange(
       (_event, newSession: Session | null) => {
-        console.log("📡 Supabase Event:", _event); // See if it's a 'SIGNED_IN' or 'TOKEN_REFRESH'  
         setSession((prev: Session | null) => {
           if (prev?.access_token === newSession?.access_token) {
             return prev; // prevent useless rerender
@@ -159,11 +148,7 @@ useEffect(() => {
 
         // 3. Update the Auth Listener to check the REF, not the STATE
         if (newSession && viewRef.current === "login") {
-          console.log("🚀 Redirecting to Home ONLY because user is actually on login");
           setCurrentView("home");
-        } else {
-          // If viewRef.current is 'inventory', this block will now correctly do nothing!
-          console.log("✅ Staying on current view:", viewRef.current);
         }
       }
     );
@@ -971,6 +956,171 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       pdf.addImage(imgData, "PNG", 0, yMm, pdfWidth, imgHeightMm);
     }
     return pdf;
+  };
+
+  const handleGenerateCatalogPdf = async (catalogProducts: any[] = [], filterLabel = "all") => {
+    if (!catalogProducts || catalogProducts.length === 0) {
+      toast.error("No products found for current filters.");
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const pdf = new jsPDF("p", "mm", "a4");
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const sideMarginMm = 8;
+      const topMarginMm = 8;
+      const bottomMarginMm = 8;
+      const usableWidthMm = pdfWidth - sideMarginMm * 2;
+      const usableHeightMm = pdfHeight - topMarginMm - bottomMarginMm;
+
+      const itemsPerPage = 12; // 3 x 4 cards
+      const pages: any[][] = [];
+      for (let i = 0; i < catalogProducts.length; i += itemsPerPage) {
+        pages.push(catalogProducts.slice(i, i + itemsPerPage));
+      }
+
+      for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
+        if (pageIndex > 0) {
+          pdf.addPage();
+        }
+
+        const pageContainer = document.createElement("div");
+        pageContainer.style.position = "fixed";
+        pageContainer.style.left = "-10000px";
+        pageContainer.style.top = "0";
+        pageContainer.style.width = "794px"; // A4-ish CSS px width
+        pageContainer.style.background = "#ffffff";
+        pageContainer.style.padding = "24px";
+        pageContainer.style.boxSizing = "border-box";
+        pageContainer.style.fontFamily = "Arial, sans-serif";
+
+        const grid = document.createElement("div");
+        grid.style.display = "grid";
+        grid.style.gridTemplateColumns = "repeat(3, 1fr)";
+        grid.style.gap = "20px";
+        pageContainer.appendChild(grid);
+
+        pages[pageIndex].forEach((p: any) => {
+          const qty = Number(p.displayStock || 0) + Number(p.godownStock || 0);
+
+          const card = document.createElement("div");
+          card.style.border = "1px solid #e2e8f0";
+          card.style.borderRadius = "8px";
+          card.style.padding = "12px";
+          card.style.minHeight = "210px";
+          card.style.display = "flex";
+          card.style.flexDirection = "column";
+          card.style.gap = "8px";
+
+          const imageWrap = document.createElement("div");
+          imageWrap.style.height = "130px";
+          imageWrap.style.display = "flex";
+          imageWrap.style.alignItems = "center";
+          imageWrap.style.justifyContent = "center";
+          imageWrap.style.border = "1px solid #f1f5f9";
+          imageWrap.style.borderRadius = "6px";
+          imageWrap.style.background = "#f8fafc";
+          imageWrap.style.overflow = "hidden";
+
+          if (isRenderableImageUrl(p.photo_url)) {
+            const img = document.createElement("img");
+            img.src = p.photo_url;
+            img.alt = p.barcode || p.name || "product";
+            img.crossOrigin = "anonymous";
+            img.style.maxWidth = "100%";
+            img.style.maxHeight = "100%";
+            img.style.objectFit = "contain";
+            imageWrap.appendChild(img);
+          } else {
+            const noImg = document.createElement("span");
+            noImg.textContent = "No Image";
+            noImg.style.color = "#94a3b8";
+            noImg.style.fontSize = "12px";
+            imageWrap.appendChild(noImg);
+          }
+
+          const codeEl = document.createElement("div");
+          codeEl.textContent = `Code: ${p.barcode || p.name || "-"}`;
+          codeEl.style.fontSize = "12px";
+          codeEl.style.fontWeight = "700";
+          codeEl.style.wordBreak = "break-all";
+
+          const qtyEl = document.createElement("div");
+          qtyEl.textContent = `Qty: ${qty}`;
+          qtyEl.style.fontSize = "12px";
+          qtyEl.style.fontWeight = "700";
+
+          const priceEl = document.createElement("div");
+          priceEl.textContent = `Price: ₹${Number(p.selling_price || p.price || 0).toLocaleString("en-IN")}`;
+          priceEl.style.fontSize = "12px";
+          priceEl.style.fontWeight = "700";
+
+          card.appendChild(imageWrap);
+          card.appendChild(codeEl);
+          card.appendChild(qtyEl);
+          card.appendChild(priceEl);
+          grid.appendChild(card);
+        });
+
+        document.body.appendChild(pageContainer);
+        try {
+          const images = pageContainer.getElementsByTagName("img");
+          await Promise.all(
+            Array.from(images).map((img) => {
+              if (img.complete) return Promise.resolve();
+              return new Promise((resolve) => {
+                img.onload = resolve;
+                img.onerror = resolve;
+              });
+            })
+          );
+
+          const canvas = await html2canvas(pageContainer, {
+            scale: 1.5,
+            useCORS: true,
+            allowTaint: false,
+            logging: false,
+            backgroundColor: "#ffffff",
+            imageTimeout: 15000,
+            onclone: (clonedDoc) => {
+              // Avoid html2canvas crashing on unsupported CSS color functions (e.g. oklch).
+              clonedDoc
+                .querySelectorAll('style,link[rel="stylesheet"]')
+                .forEach((node) => node.remove());
+            },
+          });
+
+          const imgHeightMm = (canvas.height * usableWidthMm) / canvas.width;
+          const renderHeightMm = Math.min(imgHeightMm, usableHeightMm);
+          // Pass canvas directly to avoid building very large base64 strings.
+          pdf.addImage(canvas as any, "JPEG", sideMarginMm, topMarginMm, usableWidthMm, renderHeightMm, undefined, "FAST");
+        } finally {
+          pageContainer.remove();
+        }
+      }
+
+      const safeFilterLabel = filterLabel
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .slice(0, 80) || "all";
+      pdf.save(`TLC_Catalog_${safeFilterLabel}_${new Date().toISOString().slice(0, 10)}.pdf`);
+      toast.success("Catalog PDF downloaded.");
+    } catch (error: any) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : "Failed to generate catalog PDF.";
+      console.error("Catalog PDF failed:", error);
+      toast.error(message || "Failed to generate catalog PDF.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const openDocumentPreview = async (
@@ -1947,6 +2097,7 @@ return (
                 products={products as unknown as ExtendedProduct[]}
                 onUpdateInventory={handleUpdateInventory}
                 onBulkAdd={handleBulkAdd}
+                onGenerateCatalogPdf={handleGenerateCatalogPdf}
                 onAddToCartFromInventory={async (product, quantity, room) => {
                   await handleAddToCart(product as unknown as Product, quantity, room);
                 }}
@@ -2132,7 +2283,6 @@ return (
       >
         {piPreviewData && <PrintLayout pi={piPreviewData} docType={previewDocType} />}
       </div>
-
       <Dialog open={showClientDialog} onOpenChange={setShowClientDialog}>
         <DialogContent>
           <DialogHeader>
