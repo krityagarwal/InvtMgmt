@@ -805,7 +805,7 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
       </table>
       {/* Summary Section */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '32px' }}>
-        <div style={{ width: '320px' }}>
+        <div data-pdf-nosplit="true" style={{ width: '320px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: '13px', color: '#475569' }}>
             <span>Subtotal</span>
             <span style={{ fontWeight: '600' }}>₹{subtotal.toLocaleString('en-IN')}</span>

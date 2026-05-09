@@ -894,16 +894,16 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     const firstPageHeightDom = firstPageHeightPx / scale;
     const otherPageHeightDom = otherPageHeightPx / scale;
 
-    const rowElements = Array.from(
-      element.querySelectorAll<HTMLElement>('[data-pi-item-row="true"]')
+    const blockElements = Array.from(
+      element.querySelectorAll<HTMLElement>('[data-pi-item-row="true"], [data-pdf-nosplit="true"]')
     );
     const elementRect = element.getBoundingClientRect();
-    const rowBlocks = rowElements.map((row) => {
-      const rect = row.getBoundingClientRect();
+    const rowBlocks = blockElements.map((block) => {
+      const rect = block.getBoundingClientRect();
       const top = rect.top - elementRect.top;
       const height = rect.height;
       return { top, bottom: top + height, height };
-    });
+    }).sort((a, b) => a.top - b.top);
 
     const breaksDom: number[] = [];
     let currentPageStart = 0;
