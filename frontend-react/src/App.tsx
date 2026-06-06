@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { ShoppingCart, Package, FileText, Scan, FileCheck, Home} from "lucide-react";
 import { Scanner, Product } from "./components/Scanner";
-import { Inventory, ExtendedProduct } from "./components/Inventory";
+import { Inventory, ExtendedProduct, InventoryFilterState } from "./components/Inventory";
 import { Orders, Order } from "./components/Orders";
 import { Cart, CartItem } from "./components/Cart";
 import { CartManager, ClientCart } from "./components/CartManager";
@@ -31,6 +31,14 @@ import { Label } from "./components/ui/label";
 const PRESELECTED_SHOP_ID = "102e6445-6462-4cb6-bcbf-e9dd43a70b7e";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
+const DEFAULT_INVENTORY_FILTERS: InventoryFilterState = {
+  searchTerm: "",
+  category: "all",
+  vendor: "all",
+  displayQty: { operator: "any", value: "" },
+  godownQty: { operator: "any", value: "" },
+};
+
 type View = "home" | "scanner" | "inventory" | "orders" | "cart" | "proforma" | "history" | "login";
 
 export default function App() {
@@ -43,7 +51,9 @@ export default function App() {
   const [clientCarts, setClientCarts] = useState<ClientCart[]>([]);
   const [activeCartId, setActiveCartId] = useState<string | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [products, setProducts] = useState<Product[]>([]); 
+  const [products, setProducts] = useState<Product[]>([]);
+  const [inventoryPagination, setInventoryPagination] = useState({ total: 0, skip: 0, limit: 20, hasMore: false });
+  const [inventoryFilters, setInventoryFilters] = useState<InventoryFilterState>(DEFAULT_INVENTORY_FILTERS);
   const [searchResult, setSearchResult] = useState<Product | null>(null);
   const [showClientDialog, setShowClientDialog] = useState(false);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
@@ -112,6 +122,7 @@ export default function App() {
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [auditEntityType, setAuditEntityType] = useState<string>("all");
   const [auditLoading, setAuditLoading] = useState(false);
+  const inventoryRequestIdRef = useRef(0);
 
   const viewRef = useRef(currentView);
 
@@ -350,10 +361,46 @@ const handleBulkAdd = async (newItems: any[]) => {
   }
 };
 
-  const handleLoadInventory = async () => {
-    const data = await apiCall(`${API_BASE_URL}/inventory/${PRESELECTED_SHOP_ID}`);
+  const handleLoadInventory = useCallback(async (skip: number = 0, filtersOverride?: InventoryFilterState) => {
+    const activeFilters = filtersOverride ?? inventoryFilters;
+    const params = new URLSearchParams({
+      skip: String(skip),
+      limit: "20",
+    });
+
+    const activeSearch = activeFilters.searchTerm.trim();
+    if (activeSearch) {
+      params.set("search", activeSearch);
+    }
+
+    if (activeFilters.category !== "all") {
+      params.set("category", activeFilters.category);
+    }
+
+    if (activeFilters.vendor !== "all") {
+      params.set("vendor", activeFilters.vendor);
+    }
+
+    if (activeFilters.displayQty.operator !== "any" && activeFilters.displayQty.value !== "") {
+      params.set("display_qty_operator", activeFilters.displayQty.operator);
+      params.set("display_qty_value", activeFilters.displayQty.value);
+    }
+
+    if (activeFilters.godownQty.operator !== "any" && activeFilters.godownQty.value !== "") {
+      params.set("godown_qty_operator", activeFilters.godownQty.operator);
+      params.set("godown_qty_value", activeFilters.godownQty.value);
+    }
+
+    const requestId = ++inventoryRequestIdRef.current;
+    const data = await apiCall(`${API_BASE_URL}/inventory/${PRESELECTED_SHOP_ID}?${params.toString()}`);
+
+    if (requestId !== inventoryRequestIdRef.current) return;
     
-    const mappedProducts = data.map((item: any) => ({
+    // Handle both old format (array) and new format (paginated object)
+    const items = Array.isArray(data) ? data : data.data || [];
+    const paginationInfo = Array.isArray(data) ? { total: items.length, skip: 0, limit: 20, hasMore: false } : data;
+    
+    const mappedProducts = items.map((item: any) => ({
       id: item.id,
       barcode: item.item_code,
       vendor: item.vendor_name || "-",
@@ -374,9 +421,36 @@ const handleBulkAdd = async (newItems: any[]) => {
       selling_price: item.selling_price || 0
     }));
     
-    setProducts(mappedProducts);
+    if (skip === 0) {
+      // First page - replace products
+      setProducts(mappedProducts);
+    } else {
+      // Subsequent pages - append products
+      setProducts(prev => [...prev, ...mappedProducts]);
+    }
+    
+    setInventoryPagination({
+      total: paginationInfo.total,
+      skip: paginationInfo.skip,
+      limit: paginationInfo.limit,
+      hasMore: paginationInfo.hasMore
+    });
     setInventoryLoaded(true);
+  }, [inventoryFilters]);
+
+  const handleLoadMoreInventory = async () => {
+    if (inventoryPagination.hasMore) {
+      const nextSkip = inventoryPagination.skip + inventoryPagination.limit;
+      await handleLoadInventory(nextSkip);
+    }
   };
+
+  const handleInventoryFiltersChange = useCallback(async (nextFilters: InventoryFilterState) => {
+    if (JSON.stringify(nextFilters) === JSON.stringify(inventoryFilters)) return;
+
+    setInventoryFilters(nextFilters);
+    await handleLoadInventory(0, nextFilters);
+  }, [handleLoadInventory, inventoryFilters]);
 
   // On-demand: Load active carts when button is clicked
   const handleLoadActiveCarts = async () => {
@@ -2109,6 +2183,10 @@ return (
                   setPendingAttribute("None");
                   setShowClientDialog(true);
                 }}
+                onLoadMore={handleLoadMoreInventory}
+                hasMoreProducts={inventoryPagination.hasMore}
+                onFiltersChange={handleInventoryFiltersChange}
+                totalProducts={inventoryPagination.total}
               />
             )}
 

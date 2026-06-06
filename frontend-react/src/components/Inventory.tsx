@@ -42,11 +42,30 @@ interface InventoryProps {
   activeCartId?: string | null;
   activeCartLabel?: string | null;
   onRequireActiveCart?: () => void;
+  onLoadMore?: () => Promise<void>;
+  hasMoreProducts?: boolean;
+  onSearchChange?: (searchTerm: string) => void;
+  onFiltersChange?: (filters: InventoryFilterState) => void;
+  totalProducts?: number;
 }
 
 interface CategoryOption {
   id: string;
   name: string;
+}
+
+export interface InventoryFilterState {
+  searchTerm: string;
+  category: string;
+  vendor: string;
+  displayQty: {
+    operator: string;
+    value: string;
+  };
+  godownQty: {
+    operator: string;
+    value: string;
+  };
 }
 
 const isRenderableImageUrl = (url?: string | null) =>
@@ -65,22 +84,38 @@ export function Inventory({
   activeCartId,
   activeCartLabel,
   onRequireActiveCart,
+  onLoadMore,
+  hasMoreProducts,
+  onSearchChange,
+  onFiltersChange,
+  totalProducts,
 }: InventoryProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [printSelection, setPrintSelection] = useState<{ [key: string]: number }>({});
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [priceSort, setPriceSort] = useState<{
     field: "cost_price" | "overhead_expense" | "selling_price" | null;
     direction: "asc" | "desc";
   }>({ field: null, direction: "asc" });
   const [categoryOptions, setCategoryOptions] = useState<CategoryOption[]>([]);
+  const [vendorNames, setVendorNames] = useState<string[]>([]);
   const categories = React.useMemo(
   () => ["all", ...new Set(products.map(p => p.category))],
   [products]
 );
+  const categoryFilterOptions = React.useMemo(
+    () => [
+      "all",
+      ...(categoryOptions.length > 0
+        ? categoryOptions.map((cat) => cat.name)
+        : categories.filter((cat) => cat !== "all")),
+    ],
+    [categories, categoryOptions]
+  );
 
 React.useEffect(() => {
-  const fetchCategories = async () => {
+  const fetchFilterOptions = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/categories`);
       const data = await response.json();
@@ -95,8 +130,21 @@ React.useEffect(() => {
     } catch (error) {
       console.error("Failed to load categories:", error);
     }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/vendors`);
+      const data = await response.json();
+
+      setVendorNames(
+        data
+          .map((vendor: string) => vendor.trim())
+          .filter((vendor: string) => vendor !== "" && vendor !== "-")
+      );
+    } catch (error) {
+      console.error("Failed to load vendors:", error);
+    }
   };
-  fetchCategories();
+  fetchFilterOptions();
 }, []);
 
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -110,12 +158,12 @@ React.useEffect(() => {
   });
 
   const fuse = React.useMemo(() => {
-  return new Fuse(products, {
-    keys: ["barcode"], // This matches your Product interface 'barcode' field
-    threshold: 0.3,    // Adjust for strictness (0.0 is perfect match, 1.0 is anything)
-    distance: 100
-  });
-}, [products]);
+    return new Fuse(products, {
+      keys: ["barcode"], // This matches your Product interface 'barcode' field
+      threshold: 0.3,    // Adjust for strictness (0.0 is perfect match, 1.0 is anything)
+      distance: 100
+    });
+  }, [products]);
 
   const [filters, setFilters] = useState({
     displayQty: { value: "", operator: "any" }, // any, equals, gt, lt
@@ -124,46 +172,67 @@ React.useEffect(() => {
     category: "all"
   });
 
-  // const vendorOptions = React.useMemo(() => 
-  //   ["all", ...new Set(products.map(p => p.vendor))].sort(), 
-  // [products]);
+  const usesBackendFilters = Boolean(onFiltersChange);
+
+  const activeFilterState = React.useMemo<InventoryFilterState>(() => ({
+    searchTerm,
+    category: filterCategory,
+    vendor: filters.vendor,
+    displayQty: filters.displayQty,
+    godownQty: filters.godownQty,
+  }), [filterCategory, filters.displayQty, filters.godownQty, filters.vendor, searchTerm]);
+
+  React.useEffect(() => {
+    if (!onSearchChange && !onFiltersChange) return;
+
+    const timeoutId = window.setTimeout(() => {
+      if (onFiltersChange) {
+        onFiltersChange(activeFilterState);
+      } else {
+        onSearchChange?.(searchTerm);
+      }
+    }, 300);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [activeFilterState, onFiltersChange, onSearchChange, searchTerm]);
 
   const vendorOptions = React.useMemo(() => {
-  const uniqueVendors = new Set<string>();
-  
-  products.forEach(p => {
-    // 1. Check if vendor exists
-    // 2. Trim whitespace (removes hidden spaces)
-    // 3. Convert to Uppercase (ensures 'Vendor A' and 'vendor a' are seen as same)
-    if (p.vendor && p.vendor.trim() !== "" && p.vendor !== "-") {
-      uniqueVendors.add(p.vendor.trim().toUpperCase());
-    }
-  });
+    const sourceVendors = vendorNames.length > 0
+      ? vendorNames
+      : products.map((product) => product.vendor);
+    const uniqueVendors = new Set<string>();
 
-  return ["all", ...Array.from(uniqueVendors)].sort();
-}, [products]);
+    sourceVendors.forEach((vendor) => {
+      if (vendor && vendor.trim() !== "" && vendor !== "-") {
+        uniqueVendors.add(vendor.trim().toUpperCase());
+      }
+    });
+
+    return ["all", ...Array.from(uniqueVendors)].sort();
+  }, [products, vendorNames]);
 
   const filteredProducts = products.filter((product) => {
 
     let matchesSearch = true;
-    if (searchTerm.trim() !== "") {
+    if (!onSearchChange && !usesBackendFilters && searchTerm.trim() !== "") {
       const results = fuse.search(searchTerm);
       matchesSearch = results.some(r => r.item.id === product.id);
     }
     
     // 2. Category Filter Logic
-    const matchesCategory = filterCategory === "all" || product.category === filterCategory;
+    const matchesCategory = usesBackendFilters || filterCategory === "all" || product.category === filterCategory;
 
     // 3. Vendor Filter Logic
     // const matchesVendor = filters.vendor === "all" || product.vendor === filters.vendor;
 
     // Inside filteredProducts.filter()
-    const matchesVendor = filters.vendor === "all" || 
+    const matchesVendor = usesBackendFilters || filters.vendor === "all" || 
       (product.vendor && product.vendor.trim().toUpperCase() === filters.vendor);
 
     // 4. Display Qty Numeric Logic
     const displayVal = Number(filters.displayQty.value);
     const matchesDisplay = 
+      usesBackendFilters ||
       filters.displayQty.operator === "any" || filters.displayQty.value === "" ? true :
       filters.displayQty.operator === "equals" ? product.displayStock === displayVal :
       filters.displayQty.operator === "gt" ? product.displayStock > displayVal :
@@ -172,6 +241,7 @@ React.useEffect(() => {
     // 5. Godown Qty Numeric Logic
     const godownVal = Number(filters.godownQty.value);
     const matchesGodown = 
+      usesBackendFilters ||
       filters.godownQty.operator === "any" || filters.godownQty.value === "" ? true :
       filters.godownQty.operator === "equals" ? product.godownStock === godownVal :
       filters.godownQty.operator === "gt" ? product.godownStock > godownVal :
@@ -570,7 +640,7 @@ const handlePrintLabels = () => {
               onChange={(e) => setFilterCategory(e.target.value)}
               className="h-8 px-2 border rounded-md text-xs bg-white min-w-[120px]"
             >
-              {categories.map((cat) => (
+              {categoryFilterOptions.map((cat) => (
                 <option key={cat} value={cat}>{cat === "all" ? "All Categories" : cat}</option>
               ))}
             </select>
@@ -661,7 +731,7 @@ const handlePrintLabels = () => {
 
         <CardContent className="p-0">
             <div className="px-6 pt-0 pb-3 text-xs text-slate-500">
-              Showing {isFilteredView ? filteredProducts.length : products.length} of {products.length} items
+              Showing {sortedProducts.length} of {totalProducts ?? products.length} items
             </div>
             <div className="overflow-x-auto">
             <Table className="min-w-[1220px]">
@@ -1010,6 +1080,25 @@ const handlePrintLabels = () => {
                 </TableBody>
             </Table>
           </div>
+          {hasMoreProducts && (
+            <div className="flex justify-center p-4">
+              <Button
+                onClick={async () => {
+                  setIsLoadingMore(true);
+                  try {
+                    await onLoadMore?.();
+                  } finally {
+                    setIsLoadingMore(false);
+                  }
+                }}
+                disabled={isLoadingMore}
+                variant="outline"
+                className="w-full max-w-sm"
+              >
+                {isLoadingMore ? "Loading..." : "Load More Products"}
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
     {/* The Printing Factory: Optimized to match your printSelection state */}
