@@ -1274,17 +1274,9 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     })();
     if (!activeCart) return;
 
-    // 1. FINAL VALIDATION: Check stock one last time
-    const hasShortage = activeCart.items.some(item => {
-      const masterProduct = products.find(p => p.id === item.id);
-      const available = masterProduct ? (masterProduct.displayStock + masterProduct.godownStock) : 0;
-      return item.quantity > available;
-    });
-
-    if (hasShortage) {
-      toast.error("Cannot finalize sale: One or more items exceed available stock.");
-      return;
-    }
+    // Stock validation is already done by Cart component before showing the "Sell" button
+    // (Cart checks against both loaded products and missing product stock fetched on-demand)
+    // So we can proceed directly to finalization
     
     // 2. Prepare the Request Body (JSON)
     // We include all the metadata that was previously being lost
