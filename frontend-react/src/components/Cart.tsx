@@ -423,6 +423,8 @@ export function Cart({
   const [roomSplitDrafts, setRoomSplitDrafts] = useState<Record<string, RoomSplitDraft[]>>({});
   const [selectedSplitIndexDrafts, setSelectedSplitIndexDrafts] = useState<Record<string, number>>({});
   const [isSavingRoom, setIsSavingRoom] = useState(false);
+  const [missingProductStock, setMissingProductStock] = useState<Record<string, { displayStock: number; godownStock: number }>>({});
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
   const roomOptions = ["None", "Living Room", "Bedroom", "Kitchen", "Dining", "Outdoor"];
   const numericDiscount = Number(discount) || 0;
   const baseDiscountAmount = Math.floor(subtotal * (numericDiscount / 100));
@@ -443,6 +445,40 @@ export function Cart({
     setSelectedSplitIndexDrafts({});
   }, [activeCartId]);
 
+  // Fetch stock info for items not in the loaded inventory
+  useEffect(() => {
+    if (items.length === 0) {
+      setMissingProductStock({});
+      return;
+    }
+
+    const missingIds = items
+      .map(item => item.id)
+      .filter(id => !products.find(p => p.id === id));
+
+    if (missingIds.length === 0) {
+      setMissingProductStock({});
+      return;
+    }
+
+    const fetchMissingStock = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/inventory/stock-check`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(missingIds)
+        });
+        const data = await response.json();
+        setMissingProductStock(data);
+      } catch (error) {
+        console.error('Failed to fetch missing product stock:', error);
+        setMissingProductStock({});
+      }
+    };
+
+    fetchMissingStock();
+  }, [items, products, API_BASE_URL]);
+
   useEffect(() => {
     if (!isFullPaid) return;
     const nextAdvance = Number(finalizedAmount.toFixed(2));
@@ -453,9 +489,19 @@ export function Cart({
   }, [isFullPaid, finalizedAmount, activeCart?.advancePaid]);
 
   const hasOverstockItems = items.some((item) => {
-    const master = products.find((p) => p.id === item.id);
-    const available = master ? Number(master.godownStock || 0) + Number(master.displayStock || 0) : 0;
-    return item.quantity > available;
+    // First check loaded products
+    let master = products.find((p) => p.id === item.id);
+    
+    // If not found, check missing product stock
+    if (!master && missingProductStock[item.id]) {
+      const stock = missingProductStock[item.id];
+      const available = stock.displayStock + stock.godownStock;
+      return item.quantity > available && available > 0;
+    }
+    
+    if (!master) return false; // If still not found, allow sale
+    const available = Number(master.godownStock || 0) + Number(master.displayStock || 0);
+    return item.quantity > available && available > 0; // Only flag as overstock if we have stock info and it's exceeded
   });
 
   const buildInitialSplits = (item: CartItem): RoomSplitDraft[] => {
@@ -603,8 +649,16 @@ export function Cart({
       <div className="divide-y overflow-y-auto max-h-[45vh] bg-white">
         {items.map((item) => {
           const masterProduct = products.find((p) => p.id === item.id);
-          const available = masterProduct ? (Number(masterProduct.godownStock || 0) + Number(masterProduct.displayStock || 0)) : 0;
-          const isOverStock = item.quantity > available;
+          let available = 0;
+          
+          if (masterProduct) {
+            available = Number(masterProduct.godownStock || 0) + Number(masterProduct.displayStock || 0);
+          } else if (missingProductStock[item.id]) {
+            const stock = missingProductStock[item.id];
+            available = stock.displayStock + stock.godownStock;
+          }
+          
+          const isOverStock = item.quantity > available && available > 0;
 
           return (
             <div key={item.id} className="px-3 py-2.5 relative">
@@ -793,7 +847,7 @@ export function Cart({
                     </button>
                   )}
                 </div>
-                {isOverStock && <p className="text-[9px] font-bold text-red-500 italic uppercase whitespace-nowrap">Low Stock ({available})</p>}
+                {isOverStock && <p className="text-[9px] font-bold text-red-500 italic uppercase whitespace-nowrap mt-1">⚠ Cart Qty: {item.quantity} | Available: {available}</p>}
               </div>
             </div>
           );
