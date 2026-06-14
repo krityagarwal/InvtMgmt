@@ -142,7 +142,7 @@
 // }
 
 import React from 'react';
-import { ShoppingCart, Package, ClipboardList, ScanLine, LogOut, Lightbulb, FileCheck, History } from 'lucide-react';
+import { ShoppingCart, Package, ClipboardList, ScanLine, LogOut, Lightbulb, FileCheck, History, BarChart3 } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -153,6 +153,7 @@ interface HomeScreenProps {
 
 export default function HomeScreen({ onNavigate, cartCount }: HomeScreenProps) {
   const menuItems = [
+    //{ id: 'dashboard', title: 'Analytics', desc: 'Revenue, categories & discounts', icon: BarChart3, color: 'bg-indigo-50', iconColor: 'text-indigo-600', hover: 'hover:border-indigo-500' },
     { id: 'scanner', title: 'POS Scanner', desc: 'Scan items & create bills', icon: ScanLine, color: 'bg-blue-50', iconColor: 'text-blue-600', hover: 'hover:border-blue-500' },
     { id: 'inventory', title: 'Inventory', desc: 'Manage 400+ products', icon: Package, color: 'bg-emerald-50', iconColor: 'text-emerald-600', hover: 'hover:border-emerald-500' },
     { id: 'cart', title: 'Active Carts', desc: 'Manage customer sessions', icon: ShoppingCart, color: 'bg-orange-50', iconColor: 'text-orange-600', hover: 'hover:border-orange-500', badge: cartCount },

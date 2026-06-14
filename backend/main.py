@@ -1,7 +1,7 @@
 import json
 import os
 import urllib
-from fastapi import FastAPI, Query, Body, APIRouter, HTTPException
+from fastapi import FastAPI, Query, Body, APIRouter, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
@@ -16,7 +16,7 @@ import logging
 import uuid
 import math
 import decimal
-from config import get_db_conn
+from config import get_db, get_db_conn
 from datetime import datetime
 from typing import Dict, Any
 
@@ -130,18 +130,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 @app.get("/search")
-async def search_shops(name: str):
+async def search_shops(name: str, conn = Depends(get_db)):
     # 1. Validation
     if not name or len(name.strip()) < 2:
         raise HTTPException(status_code=400, detail="Search term too short")
 
     query = "SELECT id, name FROM shops WHERE name ILIKE %s"
     
-    conn = None
     try:
-        # 2. Get the connection
-        conn = get_db_conn()
-        # 3. Use the cursor within the connection context
+        # 2. Use the cursor within the connection context
         with conn.cursor() as cur:
             logger.info(f"Searching for: {name}")
             cur.execute(query, (f"%{name}%",))
@@ -155,117 +152,221 @@ async def search_shops(name: str):
     except Exception as e:
         logger.error(f"Database error during search: {e}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-    
-    finally:
-        # 4. CRITICAL: Always close the connection on Render
-        # to prevent "Too many connections" errors in Supabase
-        if conn:
-            conn.close()
 
 @app.get("/inventory/{shop_id}")
-async def get_inventory(shop_id: str):
+async def get_inventory(
+    shop_id: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    vendor: Optional[str] = Query(None),
+    display_qty_operator: Optional[str] = Query(None),
+    display_qty_value: Optional[int] = Query(None),
+    godown_qty_operator: Optional[str] = Query(None),
+    godown_qty_value: Optional[int] = Query(None),
+    conn = Depends(get_db)
+):
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT 
-                        p.id, p.item_code, p.selling_price, p.cost_price, p.overhead_expense, p.remark, p.vendor_name, p.photo_url,
-                        p.qty_display, p.qty_godown, c.name as category_name, p.created_at
-                    FROM products p
-                    LEFT JOIN categories c ON p.category_id = c.id
-                    WHERE p.shop_id = %s
-                    ORDER BY p.created_at DESC
-                """, (shop_id,))
-                return cur.fetchall()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            search_term = search.strip() if search else ""
+            filters = []
+            params = [shop_id]
+
+            if search_term:
+                filters.append("""
+                    (
+                        p.item_code ILIKE %s
+                        OR p.vendor_name ILIKE %s
+                        OR p.remark ILIKE %s
+                        OR c.name ILIKE %s
+                    )
+                """)
+                search_pattern = f"%{search_term}%"
+                params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
+
+            if category and category.strip() and category != "all":
+                filters.append("c.name = %s")
+                params.append(category.strip())
+
+            if vendor and vendor.strip() and vendor != "all":
+                filters.append("UPPER(TRIM(p.vendor_name)) = UPPER(TRIM(%s))")
+                params.append(vendor.strip())
+
+            operator_sql = {
+                "equals": "=",
+                "gt": ">",
+                "lt": "<",
+            }
+
+            if display_qty_operator in operator_sql and display_qty_value is not None:
+                filters.append(f"p.qty_display {operator_sql[display_qty_operator]} %s")
+                params.append(display_qty_value)
+
+            if godown_qty_operator in operator_sql and godown_qty_value is not None:
+                filters.append(f"p.qty_godown {operator_sql[godown_qty_operator]} %s")
+                params.append(godown_qty_value)
+
+            filter_sql = "".join(f" AND {filter_clause}" for filter_clause in filters)
+
+            # Get total count
+            cur.execute(f"""
+                SELECT COUNT(*) as total
+                FROM products p
+                LEFT JOIN categories c ON p.category_id = c.id
+                WHERE p.shop_id = %s
+                {filter_sql}
+                """, params)
+            total_count = cur.fetchone()['total']
+            
+            # Get paginated results
+            cur.execute(f"""
+                SELECT 
+                    p.id, p.item_code, p.selling_price, p.cost_price, p.overhead_expense, p.remark, p.vendor_name,
+                    CASE
+                        WHEN p.photo_url LIKE 'data:image/%%' THEN NULL
+                        ELSE p.photo_url
+                    END AS photo_url,
+                    p.qty_display, p.qty_godown, c.name as category_name, p.created_at
+                FROM products p
+                LEFT JOIN categories c ON p.category_id = c.id                    
+                WHERE p.shop_id = %s
+                {filter_sql}
+                ORDER BY p.created_at DESC
+                LIMIT %s OFFSET %s
+                """, [*params, limit, skip])
+                # Sanitize decimals for JSON
+            rows = cur.fetchall()
+            for row in rows:
+                for key, value in row.items():
+                    if isinstance(value, decimal.Decimal):
+                        row[key] = float(value)
+            
+            return {
+                "data": rows,
+                "total": total_count,
+                "skip": skip,
+                "limit": limit,
+                "hasMore": (skip + limit) < total_count
+            }
     except Exception as e:
-        import traceback
-        print("Delete order failed:", order_id, "error:", repr(e))
-        traceback.print_exc()
-        logger.exception("Delete order failed", extra={"order_id": order_id})
+        print(f"Fetch Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/inventory/stock-check")
+async def check_product_stock(product_ids: List[str] = Body(...), conn = Depends(get_db)):
+    """
+    Get stock info (qty_display, qty_godown) for a list of product IDs.
+    Used by cart to check available stock for items not yet loaded in inventory.
+    """
+    try:
+        if not product_ids:
+            return {}
+        
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Create placeholders for the query and cast to UUID array
+            placeholders = ','.join(['%s::uuid'] * len(product_ids))
+            cur.execute(f"""
+                SELECT id, qty_display, qty_godown
+                FROM products
+                WHERE id = ANY(ARRAY[{placeholders}])
+            """, product_ids)
+            
+            rows = cur.fetchall()
+            result = {}
+            for row in rows:
+                result[str(row['id'])] = {
+                    'displayStock': row['qty_display'],
+                    'godownStock': row['qty_godown']
+                }
+            return result
+    except Exception as e:
+        print(f"Stock Check Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
     
 @app.patch("/inventory/{product_id}")
-async def update_inventory_item(product_id: str, updates: Dict[str, Any] = Body(...)):
+async def update_inventory_item(product_id: str, updates: Dict[str, Any] = Body(...), conn = Depends(get_db)):
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided for update")
 
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT * FROM products WHERE id = %s", (product_id,))
-                before_row = cur.fetchone()
-                if not before_row:
-                    raise HTTPException(status_code=404, detail="Product not found")
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM products WHERE id = %s", (product_id,))
+            before_row = cur.fetchone()
+            if not before_row:
+                raise HTTPException(status_code=404, detail="Product not found")
 
-                # 1. Build the dynamic SET clause
-                # Filter out keys that aren't valid columns to prevent SQL injection
-                allowed_cols = {
-                    "item_code", "selling_price", "cost_price", 
-                    "overhead_expense", "remark", "vendor_name", 
-                    "photo_url", "qty_display", "qty_godown", "category_id"
-                }
-                
-                # Create a list of "column = %s" strings
-                set_parts = []
-                values = []
-                
-                for key, value in updates.items():
-                    if key in allowed_cols:
-                        set_parts.append(f"{key} = %s")
-                        values.append(value)
-                
-                if not set_parts:
-                    raise HTTPException(status_code=400, detail="No valid fields provided")
+            # 1. Build the dynamic SET clause
+            # Filter out keys that aren't valid columns to prevent SQL injection
+            allowed_cols = {
+                "item_code", "selling_price", "cost_price", 
+                "overhead_expense", "remark", "vendor_name", 
+                "photo_url", "qty_display", "qty_godown", "category_id"
+            }
+            
+            # Create a list of "column = %s" strings
+            set_parts = []
+            values = []
+            
+            for key, value in updates.items():
+                if key in allowed_cols:
+                    set_parts.append(f"{key} = %s")
+                    values.append(value)
+            
+            if not set_parts:
+                raise HTTPException(status_code=400, detail="No valid fields provided")
 
-                # 2. Finalize the query with updated_at
-                set_clause = ", ".join(set_parts)
-                query = f"""
-                    UPDATE products 
-                    SET {set_clause}, updated_at = CURRENT_TIMESTAMP 
-                    WHERE id = %s 
-                    RETURNING id
-                """
-                
-                # Append product_id to values for the WHERE clause
-                values.append(product_id)
-                
-                cur.execute(query, tuple(values))
+            # 2. Finalize the query with updated_at
+            set_clause = ", ".join(set_parts)
+            query = f"""
+                UPDATE products 
+                SET {set_clause}, updated_at = CURRENT_TIMESTAMP 
+                WHERE id = %s 
+                RETURNING id
+            """
+            
+            # Append product_id to values for the WHERE clause
+            values.append(product_id)
+            
+            cur.execute(query, tuple(values))
 
-                cur.execute("SELECT * FROM products WHERE id = %s", (product_id,))
-                after_row = cur.fetchone()
+            cur.execute("SELECT * FROM products WHERE id = %s", (product_id,))
+            after_row = cur.fetchone()
 
-                changes = _compute_changes(
-                    dict(before_row),
-                    dict(after_row) if after_row else {},
-                    fields=["qty_godown", "qty_display", "cost_price", "overhead_expense", "selling_price", "vendor_name", "category_id"],
-                    labels={
-                        "qty_godown": "Godown Qty",
-                        "qty_display": "Display Qty",
-                        "cost_price": "Cost Price",
-                        "overhead_expense": "Landing Price",
-                        "selling_price": "Selling Price",
-                        "vendor_name": "Vendor",
-                        "category_id": "Category",
-                    },
-                )
+            changes = _compute_changes(
+                dict(before_row),
+                dict(after_row) if after_row else {},
+                fields=["qty_godown", "qty_display", "cost_price", "overhead_expense", "selling_price", "vendor_name", "category_id"],
+                labels={
+                    "qty_godown": "Godown Qty",
+                    "qty_display": "Display Qty",
+                    "cost_price": "Cost Price",
+                    "overhead_expense": "Landing Price",
+                    "selling_price": "Selling Price",
+                    "vendor_name": "Vendor",
+                    "category_id": "Category",
+                },
+            )
 
-                log_audit_event(
-                    cur,
-                    shop_id=str(before_row.get("shop_id")),
-                    entity_type="inventory",
-                    entity_id=str(product_id),
-                    action="inventory_update",
-                    before=dict(before_row),
-                    after={
-                        **(dict(after_row) if after_row else {}),
-                        "changes": changes,
-                        "item_code": before_row.get("item_code"),
-                    },
-                )
+            log_audit_event(
+                cur,
+                shop_id=str(before_row.get("shop_id")),
+                entity_type="inventory",
+                entity_id=str(product_id),
+                action="inventory_update",
+                before=dict(before_row),
+                after={
+                    **(dict(after_row) if after_row else {}),
+                    "changes": changes,
+                    "item_code": before_row.get("item_code"),
+                },
+            )
 
-                conn.commit()
+            conn.commit()
 
-                return {"status": "success", "updated_id": product_id}
+            return {"status": "success", "updated_id": product_id}
 
     except Exception as e:
         print(f"Update Error: {e}")
@@ -278,45 +379,44 @@ class BasketItem(BaseModel):
     attribute_metadata: Optional[List[Dict[str, Any]]] = []
 
 @app.post("/basket/add")
-async def add_to_basket(item: BasketItem):
+async def add_to_basket(item: BasketItem, conn = Depends(get_db)):
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
-                # 1. Get Product Price
-                cur.execute("SELECT selling_price FROM products WHERE id = %s", (item.product_id,))
-                res = cur.fetchone()
-                if not res: 
-                    raise HTTPException(status_code=404, detail="Product not found")
-                price = res['selling_price']
+        with conn.cursor() as cur:
+            # 1. Get Product Price
+            cur.execute("SELECT selling_price FROM products WHERE id = %s", (item.product_id,))
+            res = cur.fetchone()
+            if not res: 
+                raise HTTPException(status_code=404, detail="Product not found")
+            price = res['selling_price']
 
-                # 2. Add or Update the item in the specific basket (order_id)
-                # We now also update the attribute_metadata column
-                cur.execute("""
-                    INSERT INTO order_items (order_id, product_id, quantity, unit_price, attribute_metadata)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (order_id, product_id) DO UPDATE 
-                    SET 
-                        quantity = order_items.quantity + EXCLUDED.quantity,
-                        attribute_metadata = EXCLUDED.attribute_metadata
-                """, (
-                    item.order_id, 
-                    item.product_id, 
-                    item.qty, 
-                    price, 
-                    # We expect the frontend to send the full updated JSON array
-                    json.dumps(item.attribute_metadata) if hasattr(item, 'attribute_metadata') else '[]'
-                ))
-                
-                # Recalculate after adding new item
-                update_order_total(cur, item.order_id)
-                conn.commit()
-                return {"status": "success", "message": "Item added to session"}
+            # 2. Add or Update the item in the specific basket (order_id)
+            # We now also update the attribute_metadata column
+            cur.execute("""
+                INSERT INTO order_items (order_id, product_id, quantity, unit_price, attribute_metadata)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (order_id, product_id) DO UPDATE 
+                SET 
+                    quantity = order_items.quantity + EXCLUDED.quantity,
+                    attribute_metadata = EXCLUDED.attribute_metadata
+            """, (
+                item.order_id, 
+                item.product_id, 
+                item.qty, 
+                price, 
+                # We expect the frontend to send the full updated JSON array
+                json.dumps(item.attribute_metadata) if hasattr(item, 'attribute_metadata') else '[]'
+            ))
+            
+            # Recalculate after adding new item
+            update_order_total(cur, item.order_id)
+            conn.commit()
+            return {"status": "success", "message": "Item added to session"}
     except Exception as e:
         logger.error(f"Error adding to basket: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/basket/{shop_id}")
-async def get_active_basket(shop_id: str):
+async def get_active_basket(shop_id: str, conn = Depends(get_db)):
     query_order = """
         SELECT id, status FROM orders 
         WHERE shop_id = %s AND status = 'bucket' 
@@ -329,24 +429,22 @@ async def get_active_basket(shop_id: str):
         WHERE oi.order_id = %s
     """
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query_order, (shop_id,))
-                order = cur.fetchone()
-                if not order: return {}
-                
-                cur.execute(query_items, (order['id'],))
-                order['order_items'] = cur.fetchall()
-                return order
+        with conn.cursor() as cur:
+            cur.execute(query_order, (shop_id,))
+            order = cur.fetchone()
+            if not order: return {}
+            
+            cur.execute(query_items, (order['id'],))
+            order['order_items'] = cur.fetchall()
+            return order
     except Exception as e:
         return {"error": str(e)}
     
 @app.get("/product/by-code")
-async def get_product_by_code(item_code: str):
-    with get_db_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM products WHERE item_code = %s", (item_code,))
-            return cur.fetchone() 
+async def get_product_by_code(item_code: str, conn = Depends(get_db)):
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM products WHERE item_code = %s", (item_code,))
+        return cur.fetchone() 
             
 class BasketCreate(BaseModel):
     shop_id: str
@@ -358,65 +456,64 @@ class BasketCreate(BaseModel):
     qty: Optional[int] = 1
 
 @app.post("/basket/create")
-async def create_basket(req: BasketCreate):
+async def create_basket(req: BasketCreate, conn = Depends(get_db)):
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
-                client_id = None
-                
-                # 1. Identity Resolution: Check if client exists IN THIS SHOP
-                if req.client_phone:
-                    cur.execute(
-                        "SELECT id FROM clients WHERE shop_id = %s AND phone = %s", 
-                        (req.shop_id, req.client_phone)
-                    )
-                    existing = cur.fetchone()
-                    if existing:
-                        client_id = existing['id']
+        with conn.cursor() as cur:
+            client_id = None
+            
+            # 1. Identity Resolution: Check if client exists IN THIS SHOP
+            if req.client_phone:
+                cur.execute(
+                    "SELECT id FROM clients WHERE shop_id = %s AND phone = %s", 
+                    (req.shop_id, req.client_phone)
+                )
+                existing = cur.fetchone()
+                if existing:
+                    client_id = existing['id']
 
-                # 2. Create new client record if not found
-                if not client_id:
-                    # Original logic maintained: shop_id is passed during client creation
-                    cur.execute(
-                        "INSERT INTO clients (shop_id, name, phone) VALUES (%s, %s, %s) RETURNING id", 
-                        (req.shop_id, req.client_name, req.client_phone)
-                    )
-                    client_id = cur.fetchone()['id']
-                
-                # 3. Create the Order with Transactional Snapshot
+            # 2. Create new client record if not found
+            if not client_id:
+                # Original logic maintained: shop_id is passed during client creation
+                cur.execute(
+                    "INSERT INTO clients (shop_id, name, phone) VALUES (%s, %s, %s) RETURNING id", 
+                    (req.shop_id, req.client_name, req.client_phone)
+                )
+                client_id = cur.fetchone()['id']
+            
+            # 3. Create the Order with Transactional Snapshot
+            cur.execute("""
+                INSERT INTO orders (
+                    shop_id, client_id, status, client_name, 
+                    client_phone, referral_source, delivery_address,
+                    discount_percent, tax_percent
+                ) 
+                VALUES (%s, %s, 'bucket', %s, %s, %s, %s, 0, 0) RETURNING id
+            """, (
+                req.shop_id, 
+                client_id, 
+                req.client_name, 
+                req.client_phone,
+                req.referral_source, 
+                req.delivery_address,
+            ))
+            new_order_id = cur.fetchone()['id']
+
+            # 4. Insert the first item if provided
+            if req.initial_product_id:
                 cur.execute("""
-                    INSERT INTO orders (
-                        shop_id, client_id, status, client_name, 
-                        client_phone, referral_source, delivery_address,
-                        discount_percent, tax_percent
-                    ) 
-                    VALUES (%s, %s, 'bucket', %s, %s, %s, %s, 0, 0) RETURNING id
-                """, (
-                    req.shop_id, 
-                    client_id, 
-                    req.client_name, 
-                    req.client_phone,
-                    req.referral_source, 
-                    req.delivery_address,
-                ))
-                new_order_id = cur.fetchone()['id']
+                    INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+                    VALUES (%s, %s, %s, (SELECT selling_price FROM products WHERE id = %s))
+                """, (new_order_id, req.initial_product_id, req.qty, req.initial_product_id))
 
-                # 4. Insert the first item if provided
-                if req.initial_product_id:
-                    cur.execute("""
-                        INSERT INTO order_items (order_id, product_id, quantity, unit_price)
-                        VALUES (%s, %s, %s, (SELECT selling_price FROM products WHERE id = %s))
-                    """, (new_order_id, req.initial_product_id, req.qty, req.initial_product_id))
-
-                # 5. Finalize totals and commit
-                update_order_total(cur, new_order_id)
-                conn.commit()
-                
-                return {
-                    "order_id": new_order_id, 
-                    "client_id": client_id,
-                    "client_name": req.client_name
-                }
+            # 5. Finalize totals and commit
+            update_order_total(cur, new_order_id)
+            conn.commit()
+            
+            return {
+                "order_id": new_order_id, 
+                "client_id": client_id,
+                "client_name": req.client_name
+            }
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -538,12 +635,11 @@ class FinalizeOrderRequest(BaseModel):
     client_phone: str = ""
 
 @app.post("/order/finalize-sale")
-async def finalize_order(req: FinalizeOrderRequest): # Now accepts the full object
+async def finalize_order(req: FinalizeOrderRequest, conn = Depends(get_db)): # Now accepts the full object
     # Define queries
     query_items = "SELECT product_id, quantity FROM order_items WHERE order_id = %s"
     
-    with get_db_conn() as conn:
-        with conn.cursor() as cur:
+    with conn.cursor() as cur:
             # A. Fetch items for stock deduction
             cur.execute(query_items, (req.order_id,))
             items = cur.fetchall()
@@ -630,50 +726,49 @@ class PIRequest(BaseModel):
     discount_percent: float
 
 @app.post("/order/convert-to-pi")
-async def convert_to_pi(req: PIRequest):
+async def convert_to_pi(req: PIRequest, conn = Depends(get_db)):
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
-                # 1. Calculate the subtotal from order_items
-                cur.execute("SELECT SUM(total_price) as subtotal FROM order_items WHERE order_id = %s", (req.order_id,))
-                subtotal = cur.fetchone()['subtotal'] or 0
-                
-                # 2. Apply discount
-                final_total = float(subtotal) * (1 - (req.discount_percent / 100))
-                
-                # 3. Update Order status to 'pi' and save totals
-                cur.execute("""
-                    UPDATE orders 
-                    SET status = 'pi', 
-                        discount_percent = %s, 
-                        final_total = %s 
-                    WHERE id = %s
-                """, (req.discount_percent, final_total, req.order_id))
-                # Recalculate total with the new discount
-                update_order_total(cur, req.order_id)
+        with conn.cursor() as cur:
+            # 1. Calculate the subtotal from order_items
+            cur.execute("SELECT SUM(total_price) as subtotal FROM order_items WHERE order_id = %s", (req.order_id,))
+            subtotal = cur.fetchone()['subtotal'] or 0
+            
+            # 2. Apply discount
+            final_total = float(subtotal) * (1 - (req.discount_percent / 100))
+            
+            # 3. Update Order status to 'pi' and save totals
+            cur.execute("""
+                UPDATE orders 
+                SET status = 'pi', 
+                    discount_percent = %s, 
+                    final_total = %s 
+                WHERE id = %s
+            """, (req.discount_percent, final_total, req.order_id))
+            # Recalculate total with the new discount
+            update_order_total(cur, req.order_id)
 
-                cur.execute("SELECT shop_id, client_name FROM orders WHERE id = %s", (req.order_id,))
-                order_row = cur.fetchone()
-                if order_row:
-                    log_audit_event(
-                        cur,
-                        shop_id=str(order_row.get("shop_id")),
-                        entity_type="order",
-                        entity_id=str(req.order_id),
-                        action="pi_created",
-                        before=None,
-                        after={
-                            "order_number": str(req.order_id)[:8].upper(),
-                            "client_name": order_row.get("client_name"),
-                        },
-                    )
-                conn.commit()
-                return {"status": "success", "final_total": final_total}
+            cur.execute("SELECT shop_id, client_name FROM orders WHERE id = %s", (req.order_id,))
+            order_row = cur.fetchone()
+            if order_row:
+                log_audit_event(
+                    cur,
+                    shop_id=str(order_row.get("shop_id")),
+                    entity_type="order",
+                    entity_id=str(req.order_id),
+                    action="pi_created",
+                    before=None,
+                    after={
+                        "order_number": str(req.order_id)[:8].upper(),
+                        "client_name": order_row.get("client_name"),
+                    },
+                )
+            conn.commit()
+            return {"status": "success", "final_total": final_total}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/basket/details/{order_id}")
-async def get_basket_details(order_id: str):
+async def get_basket_details(order_id: str, conn = Depends(get_db)):
     # 1. Added attribute_metadata to the SELECT query
     query_items = """
         SELECT oi.product_id, oi.quantity, oi.unit_price, p.item_code, oi.attribute_metadata, p.photo_url
@@ -682,8 +777,7 @@ async def get_basket_details(order_id: str):
         WHERE oi.order_id = %s
     """
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
                 cur.execute(query_items, (order_id,))
                 raw_items = cur.fetchall()
                 
@@ -742,7 +836,7 @@ async def get_basket_details(order_id: str):
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.get("/orders/list/{shop_id}")
-async def list_orders(shop_id: str, status: str = None):
+async def list_orders(shop_id: str, status: str = None, conn = Depends(get_db)):
     query = """
         SELECT id, status, final_total, created_at, 
                discount_percent, tax_percent, paid_amount,
@@ -760,8 +854,7 @@ async def list_orders(shop_id: str, status: str = None):
     query += " ORDER BY created_at DESC"
     
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
                 cur.execute(query, tuple(params))
                 return cur.fetchall()
     except Exception as e:
@@ -770,7 +863,7 @@ async def list_orders(shop_id: str, status: str = None):
 
 
 @app.get("/orders/summary/{shop_id}")
-async def orders_summary(shop_id: str):
+async def orders_summary(shop_id: str, conn = Depends(get_db)):
     """
     Financial summary for Orders dashboard.
     Uses SOLD orders as realized revenue base.
@@ -815,8 +908,7 @@ async def orders_summary(shop_id: str):
         CROSS JOIN profit_totals pt
     """
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
                 cur.execute(query, (shop_id,))
                 res = cur.fetchone() or {}
                 return {
@@ -829,6 +921,395 @@ async def orders_summary(shop_id: str):
     except Exception as e:
         logger.error(f"Error fetching order summary: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _to_float(value) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, decimal.Decimal):
+        return float(value)
+    return float(value)
+
+
+@app.get("/stats/dashboard/{shop_id}")
+async def stats_dashboard(shop_id: str, conn=Depends(get_db)):
+    """
+    Analytics dashboard: revenue trends, category performance, discount metrics,
+    and client insights (top customers, referral sources, repeat rate).
+    All metrics use sold orders; revenue = final_total - write_off_amount.
+    Dates use Asia/Kolkata for today / month boundaries.
+    """
+    period_query = """
+        WITH sold AS (
+            SELECT
+                id,
+                created_at,
+                final_total - COALESCE(write_off_amount, 0) AS net_revenue,
+                paid_amount,
+                subtotal,
+                discount_percent,
+                discount_amount,
+                extra_discount_amount
+            FROM orders
+            WHERE shop_id = %s AND status = 'sold'
+        ),
+        bounds AS (
+            SELECT
+                (NOW() AT TIME ZONE 'Asia/Kolkata')::date AS today,
+                DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Kolkata')::date AS month_start,
+                (DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Kolkata') - INTERVAL '1 month')::date AS last_month_start,
+                (DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Kolkata') - INTERVAL '1 day')::date AS last_month_end
+        )
+        SELECT
+            COALESCE(SUM(net_revenue) FILTER (
+                WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date = bounds.today
+            ), 0) AS today_revenue,
+            COUNT(*) FILTER (
+                WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date = bounds.today
+            ) AS today_orders,
+            COALESCE(SUM(paid_amount) FILTER (
+                WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date = bounds.today
+            ), 0) AS today_collected,
+            COALESCE(SUM(net_revenue) FILTER (
+                WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date >= bounds.month_start
+            ), 0) AS month_revenue,
+            COUNT(*) FILTER (
+                WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date >= bounds.month_start
+            ) AS month_orders,
+            COALESCE(SUM(paid_amount) FILTER (
+                WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date >= bounds.month_start
+            ), 0) AS month_collected,
+            COALESCE(SUM(net_revenue) FILTER (
+                WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date >= bounds.last_month_start
+                  AND (created_at AT TIME ZONE 'Asia/Kolkata')::date <= bounds.last_month_end
+            ), 0) AS last_month_revenue,
+            COUNT(*) FILTER (
+                WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date >= bounds.last_month_start
+                  AND (created_at AT TIME ZONE 'Asia/Kolkata')::date <= bounds.last_month_end
+            ) AS last_month_orders,
+            COALESCE(SUM(net_revenue), 0) AS all_time_revenue,
+            COUNT(*) AS all_time_orders,
+            COALESCE(SUM(paid_amount), 0) AS all_time_collected
+        FROM sold
+        CROSS JOIN bounds
+    """
+
+    daily_trend_query = """
+        SELECT
+            TO_CHAR((created_at AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS date,
+            COALESCE(SUM(final_total - COALESCE(write_off_amount, 0)), 0) AS revenue,
+            COUNT(*) AS orders
+        FROM orders
+        WHERE shop_id = %s
+          AND status = 'sold'
+          AND (created_at AT TIME ZONE 'Asia/Kolkata')::date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date - INTERVAL '29 days'
+        GROUP BY 1
+        ORDER BY 1 ASC
+    """
+
+    monthly_trend_query = """
+        SELECT
+            TO_CHAR(DATE_TRUNC('month', created_at AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM') AS month,
+            COALESCE(SUM(final_total - COALESCE(write_off_amount, 0)), 0) AS revenue,
+            COUNT(*) AS orders
+        FROM orders
+        WHERE shop_id = %s
+          AND status = 'sold'
+          AND created_at >= DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Kolkata') - INTERVAL '11 months'
+        GROUP BY 1
+        ORDER BY 1 ASC
+    """
+
+    category_query = """
+        WITH category_totals AS (
+            SELECT
+                COALESCE(c.name, 'Uncategorized') AS category,
+                COUNT(DISTINCT o.id) AS orders,
+                COALESCE(SUM(oi.quantity), 0) AS units_sold,
+                COALESCE(SUM(oi.total_price), 0) AS line_revenue
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            JOIN products p ON p.id = oi.product_id
+            LEFT JOIN categories c ON c.id = p.category_id
+            WHERE o.shop_id = %s AND o.status = 'sold'
+            GROUP BY 1
+        ),
+        grand AS (
+            SELECT COALESCE(SUM(line_revenue), 0) AS total FROM category_totals
+        )
+        SELECT
+            ct.category,
+            ct.orders,
+            ct.units_sold,
+            ct.line_revenue,
+            CASE
+                WHEN g.total > 0 THEN ROUND((ct.line_revenue / g.total) * 100, 1)
+                ELSE 0
+            END AS share_percent
+        FROM category_totals ct
+        CROSS JOIN grand g
+        ORDER BY ct.line_revenue DESC
+    """
+
+    discount_query = """
+        SELECT
+            COUNT(*) AS total_orders,
+            COUNT(*) FILTER (
+                WHERE COALESCE(discount_percent, 0) > 0
+                   OR COALESCE(extra_discount_amount, 0) > 0
+            ) AS orders_with_discount,
+            COALESCE(AVG(COALESCE(discount_percent, 0)), 0) AS avg_discount_percent,
+            COALESCE(AVG(COALESCE(extra_discount_amount, 0)), 0) AS avg_extra_discount,
+            COALESCE(SUM(COALESCE(discount_amount, 0) + COALESCE(extra_discount_amount, 0)), 0) AS total_discount_given,
+            COALESCE(SUM(COALESCE(subtotal, 0)), 0) AS total_subtotal
+        FROM orders
+        WHERE shop_id = %s AND status = 'sold'
+    """
+
+    client_summary_query = """
+        WITH sold AS (
+            SELECT
+                client_id,
+                client_name,
+                client_phone,
+                final_total - COALESCE(write_off_amount, 0) AS net_revenue,
+                created_at
+            FROM orders
+            WHERE shop_id = %s AND status = 'sold'
+        ),
+        grouped AS (
+            SELECT
+                COALESCE(
+                    client_id::text,
+                    NULLIF(TRIM(client_phone), ''),
+                    LOWER(TRIM(COALESCE(client_name, 'Unknown')))
+                ) AS client_key,
+                MAX(client_name) AS client_name,
+                MAX(client_phone) AS client_phone,
+                COUNT(*) AS order_count,
+                SUM(net_revenue) AS total_revenue,
+                MIN(created_at) AS first_order_at,
+                MAX(created_at) AS last_order_at
+            FROM sold
+            GROUP BY 1
+        )
+        SELECT
+            COUNT(*) AS total_customers,
+            COUNT(*) FILTER (WHERE order_count > 1) AS repeat_customers,
+            COUNT(*) FILTER (
+                WHERE (first_order_at AT TIME ZONE 'Asia/Kolkata')::date >=
+                      DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Kolkata')::date
+            ) AS new_this_month,
+            COALESCE(AVG(total_revenue), 0) AS avg_lifetime_value,
+            COALESCE(AVG(order_count), 0) AS avg_orders_per_customer
+        FROM grouped
+    """
+
+    top_clients_query = """
+        WITH sold AS (
+            SELECT
+                client_id,
+                client_name,
+                client_phone,
+                final_total - COALESCE(write_off_amount, 0) AS net_revenue,
+                created_at
+            FROM orders
+            WHERE shop_id = %s AND status = 'sold'
+        ),
+        grouped AS (
+            SELECT
+                COALESCE(
+                    client_id::text,
+                    NULLIF(TRIM(client_phone), ''),
+                    LOWER(TRIM(COALESCE(client_name, 'Unknown')))
+                ) AS client_key,
+                MAX(client_name) AS client_name,
+                MAX(client_phone) AS client_phone,
+                COUNT(*) AS order_count,
+                SUM(net_revenue) AS total_revenue,
+                MAX(created_at) AS last_order_at
+            FROM sold
+            GROUP BY 1
+        )
+        SELECT
+            COALESCE(NULLIF(TRIM(client_name), ''), 'Unknown') AS client_name,
+            COALESCE(NULLIF(TRIM(client_phone), ''), '') AS client_phone,
+            order_count,
+            total_revenue,
+            last_order_at
+        FROM grouped
+        ORDER BY total_revenue DESC
+        LIMIT 10
+    """
+
+    referral_query = """
+        WITH sold AS (
+            SELECT
+                client_id,
+                client_name,
+                client_phone,
+                referral_source,
+                final_total - COALESCE(write_off_amount, 0) AS net_revenue
+            FROM orders
+            WHERE shop_id = %s AND status = 'sold'
+        ),
+        grouped AS (
+            SELECT
+                COALESCE(NULLIF(TRIM(referral_source), ''), 'Unknown') AS source,
+                COUNT(*) AS orders,
+                COUNT(DISTINCT COALESCE(
+                    client_id::text,
+                    NULLIF(TRIM(client_phone), ''),
+                    LOWER(TRIM(COALESCE(client_name, 'Unknown')))
+                )) AS customers,
+                COALESCE(SUM(net_revenue), 0) AS revenue
+            FROM sold
+            GROUP BY 1
+        ),
+        grand AS (
+            SELECT COALESCE(SUM(revenue), 0) AS total FROM grouped
+        )
+        SELECT
+            g.source,
+            g.orders,
+            g.customers,
+            g.revenue,
+            CASE
+                WHEN gr.total > 0 THEN ROUND((g.revenue / gr.total) * 100, 1)
+                ELSE 0
+            END AS share_percent
+        FROM grouped g
+        CROSS JOIN grand gr
+        ORDER BY g.revenue DESC
+    """
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(period_query, (shop_id,))
+            period = cur.fetchone() or {}
+
+            cur.execute(daily_trend_query, (shop_id,))
+            daily_rows = cur.fetchall() or []
+
+            cur.execute(monthly_trend_query, (shop_id,))
+            monthly_rows = cur.fetchall() or []
+
+            cur.execute(category_query, (shop_id,))
+            category_rows = cur.fetchall() or []
+
+            cur.execute(discount_query, (shop_id,))
+            discount = cur.fetchone() or {}
+
+            cur.execute(client_summary_query, (shop_id,))
+            client_summary = cur.fetchone() or {}
+
+            cur.execute(top_clients_query, (shop_id,))
+            top_client_rows = cur.fetchall() or []
+
+            cur.execute(referral_query, (shop_id,))
+            referral_rows = cur.fetchall() or []
+
+        total_orders = int(discount.get("total_orders") or 0)
+        orders_with_discount = int(discount.get("orders_with_discount") or 0)
+        total_subtotal = _to_float(discount.get("total_subtotal"))
+        total_discount_given = _to_float(discount.get("total_discount_given"))
+        discount_rate = round((orders_with_discount / total_orders) * 100, 1) if total_orders else 0.0
+        effective_discount_percent = round((total_discount_given / total_subtotal) * 100, 1) if total_subtotal else 0.0
+
+        total_customers = int(client_summary.get("total_customers") or 0)
+        repeat_customers = int(client_summary.get("repeat_customers") or 0)
+        repeat_rate = round((repeat_customers / total_customers) * 100, 1) if total_customers else 0.0
+
+        return {
+            "period": {
+                "today": {
+                    "revenue": _to_float(period.get("today_revenue")),
+                    "orders": int(period.get("today_orders") or 0),
+                    "collected": _to_float(period.get("today_collected")),
+                },
+                "this_month": {
+                    "revenue": _to_float(period.get("month_revenue")),
+                    "orders": int(period.get("month_orders") or 0),
+                    "collected": _to_float(period.get("month_collected")),
+                },
+                "last_month": {
+                    "revenue": _to_float(period.get("last_month_revenue")),
+                    "orders": int(period.get("last_month_orders") or 0),
+                },
+                "all_time": {
+                    "revenue": _to_float(period.get("all_time_revenue")),
+                    "orders": int(period.get("all_time_orders") or 0),
+                    "collected": _to_float(period.get("all_time_collected")),
+                },
+            },
+            "daily_trend": [
+                {
+                    "date": row["date"],
+                    "revenue": _to_float(row["revenue"]),
+                    "orders": int(row["orders"] or 0),
+                }
+                for row in daily_rows
+            ],
+            "monthly_trend": [
+                {
+                    "month": row["month"],
+                    "revenue": _to_float(row["revenue"]),
+                    "orders": int(row["orders"] or 0),
+                }
+                for row in monthly_rows
+            ],
+            "categories": [
+                {
+                    "name": row["category"],
+                    "orders": int(row["orders"] or 0),
+                    "units_sold": int(row["units_sold"] or 0),
+                    "revenue": _to_float(row["line_revenue"]),
+                    "share_percent": _to_float(row["share_percent"]),
+                }
+                for row in category_rows
+            ],
+            "discounts": {
+                "avg_discount_percent": round(_to_float(discount.get("avg_discount_percent")), 1),
+                "avg_extra_discount": round(_to_float(discount.get("avg_extra_discount")), 0),
+                "total_discount_given": total_discount_given,
+                "orders_with_discount": orders_with_discount,
+                "total_orders": total_orders,
+                "discount_rate_percent": discount_rate,
+                "effective_discount_percent": effective_discount_percent,
+            },
+            "clients": {
+                "total_customers": total_customers,
+                "repeat_customers": repeat_customers,
+                "repeat_rate_percent": repeat_rate,
+                "new_this_month": int(client_summary.get("new_this_month") or 0),
+                "avg_lifetime_value": round(_to_float(client_summary.get("avg_lifetime_value")), 0),
+                "avg_orders_per_customer": round(_to_float(client_summary.get("avg_orders_per_customer")), 1),
+            },
+            "top_clients": [
+                {
+                    "name": row["client_name"],
+                    "phone": row["client_phone"] or "",
+                    "orders": int(row["order_count"] or 0),
+                    "revenue": _to_float(row["total_revenue"]),
+                    "last_order_at": row["last_order_at"].isoformat() if row.get("last_order_at") else None,
+                }
+                for row in top_client_rows
+            ],
+            "referral_sources": [
+                {
+                    "source": row["source"],
+                    "orders": int(row["orders"] or 0),
+                    "customers": int(row["customers"] or 0),
+                    "revenue": _to_float(row["revenue"]),
+                    "share_percent": _to_float(row["share_percent"]),
+                }
+                for row in referral_rows
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Error fetching dashboard stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 class QtyUpdate(BaseModel):
     order_id: str
@@ -853,10 +1334,10 @@ async def get_audit_events(
     entity_type: Optional[str] = None,
     limit: int = 200,
     offset: int = 0,
+    conn = Depends(get_db)
 ):
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
                 query = """
                     SELECT id, entity_type, entity_id, action, actor_id, actor_email, source, notes, before, after, created_at
                     FROM audit_events
@@ -876,10 +1357,9 @@ async def get_audit_events(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/order/update-qty")
-async def update_order_item_qty(req: QtyUpdate):
+async def update_order_item_qty(req: QtyUpdate, conn = Depends(get_db)):
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
                 # 1. Fetch current quantity first to validate the change
                 cur.execute(
                     "SELECT quantity FROM order_items WHERE order_id = %s AND product_id = %s",
@@ -952,10 +1432,9 @@ async def update_order_item_qty(req: QtyUpdate):
 
 
 @app.post("/order/update-item-metadata")
-async def update_order_item_metadata(req: ItemMetadataUpdate):
+async def update_order_item_metadata(req: ItemMetadataUpdate, conn = Depends(get_db)):
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
                 cur.execute(
                     """
                     UPDATE order_items
@@ -977,10 +1456,9 @@ async def update_order_item_metadata(req: ItemMetadataUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/order/remove-item")
-async def remove_order_item(order_id: str, product_id: str):
+async def remove_order_item(order_id: str, product_id: str, conn = Depends(get_db)):
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT o.shop_id, o.status, o.client_name, oi.quantity, p.item_code
@@ -1091,15 +1569,14 @@ def update_order_total(cur, order_id, final_total_override: Optional[float] = No
     """, (subtotal, discount_percent, discount_amount, final_extra_discount_amount, tax_amount, final_total, order_id))
 
 @app.delete("/order/delete/{order_id}")
-async def delete_order(order_id: str):
+async def delete_order(order_id: str, conn = Depends(get_db)):
     try:
         uuid.UUID(order_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid order_id format.")
     try:
         print(f"[delete_order] start order_id={order_id}")
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
                 # 1. Verify status is deletable before allowing delete
                 cur.execute("SELECT status, shop_id, client_name FROM orders WHERE id = %s", (order_id,))
                 res = cur.fetchone()
@@ -1161,20 +1638,34 @@ class ProductAdd(BaseModel):
     image_url: str
 
 @app.get("/categories")
-async def get_categories():
+async def get_categories(conn = Depends(get_db)):
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT id,name FROM categories ORDER BY name ASC")
-                return cur.fetchall()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id,name FROM categories ORDER BY name ASC")
+            return cur.fetchall()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))    
 
-@app.post("/inventory/add")
-async def add_inventory(req: ProductAdd):
+@app.get("/vendors")
+async def get_vendors(conn = Depends(get_db)):
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT vendor_name
+                FROM products
+                WHERE vendor_name IS NOT NULL
+                    AND TRIM(vendor_name) <> ''
+                    AND vendor_name <> '-'
+                ORDER BY vendor_name ASC
+            """)
+            return [row["vendor_name"] for row in cur.fetchall()]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/inventory/add")
+async def add_inventory(req: ProductAdd, conn = Depends(get_db)):
+    try:
+        with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO products (
                         item_code, category, vendor_name, display_qty, godown_qty, 
@@ -1206,10 +1697,9 @@ class BulkProductAdd(BaseModel):
 
 # 1. Unified Bulk Insert
 @app.post("/inventory/bulk-add")
-async def bulk_add_inventory(items: List[BulkProductAdd]):
+async def bulk_add_inventory(items: List[BulkProductAdd], conn = Depends(get_db)):
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
                 query = """
                     INSERT INTO products (
                         shop_id, category_id, item_code, photo_url, 
@@ -1339,15 +1829,14 @@ async def update_order_status(request: StatusUpdateRequest):
         conn.close()
 
 @app.post("/order/record-payment")
-async def record_payment(data: dict):
+async def record_payment(data: dict, conn = Depends(get_db)):
     order_id = data.get("order_id")
     amount = float(data.get("amount", 0))
     method = data.get("method", "Cash")
     notes = data.get("notes", "")
 
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
                 cur.execute("SELECT shop_id, paid_amount FROM orders WHERE id = %s", (order_id,))
                 order_row = cur.fetchone()
                 if not order_row:
@@ -1388,13 +1877,12 @@ async def record_payment(data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/order/write-off")
-async def write_off_balance(req: WriteOffRequest):
+async def write_off_balance(req: WriteOffRequest, conn = Depends(get_db)):
     if req.amount is None or req.amount <= 0:
         raise HTTPException(status_code=400, detail="Write-off amount must be greater than 0")
 
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT shop_id, final_total, paid_amount, write_off_amount
@@ -1456,10 +1944,9 @@ async def write_off_balance(req: WriteOffRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/order/write-offs/{order_id}")
-async def get_order_write_offs(order_id: str):
+async def get_order_write_offs(order_id: str, conn = Depends(get_db)):
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT id, amount, reason, notes, created_at
@@ -1492,10 +1979,9 @@ async def get_order_write_offs(order_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/order/payments/{order_id}")
-async def get_order_payments(order_id: str):
+async def get_order_payments(order_id: str, conn = Depends(get_db)):
     try:
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT id, amount, payment_method, notes, transaction_date

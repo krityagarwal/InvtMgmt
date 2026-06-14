@@ -7,6 +7,7 @@ import { Cart, CartItem } from "./components/Cart";
 import { CartManager, ClientCart } from "./components/CartManager";
 import { ProformaInvoices, ProformaInvoice, PrintLayout, PrintDocumentType } from "./components/ProformaInvoices";
 import { History, AuditEvent } from "./components/History";
+import { Dashboard, DashboardStats } from "./components/Dashboard";
 import { Button } from "./components/ui/button";
 import { Badge } from "./components/ui/badge";
 import { toast } from "sonner";
@@ -39,7 +40,7 @@ const DEFAULT_INVENTORY_FILTERS: InventoryFilterState = {
   godownQty: { operator: "any", value: "" },
 };
 
-type View = "home" | "scanner" | "inventory" | "orders" | "cart" | "proforma" | "history" | "login";
+type View = "home" | "scanner" | "inventory" | "orders" | "cart" | "proforma" | "history" | "dashboard" | "login";
 
 export default function App() {
   const isRenderableImageUrl = (url?: string | null) =>
@@ -122,6 +123,8 @@ export default function App() {
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [auditEntityType, setAuditEntityType] = useState<string>("all");
   const [auditLoading, setAuditLoading] = useState(false);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
+  const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const inventoryRequestIdRef = useRef(0);
 
   const viewRef = useRef(currentView);
@@ -131,6 +134,20 @@ useEffect(() => {
     handleLoadAuditEvents(auditEntityType);
   }
 }, [currentView]);
+
+useEffect(() => {
+  const handleSecretShortcut = (e: KeyboardEvent) => {
+    // Secret combination: Ctrl + Shift + A
+    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'a') {
+      e.preventDefault();
+      setCurrentView("dashboard");
+      toast.success("Welcome to hidden admin dashboard!");
+    }
+  };
+
+  window.addEventListener("keydown", handleSecretShortcut);
+  return () => window.removeEventListener("keydown", handleSecretShortcut);
+}, []);
 
 //chatgpt
 useEffect(() => {
@@ -213,6 +230,10 @@ useEffect(() => {
 
         case "orders":
           await handleLoadOrders();
+          break;
+
+        case "dashboard":
+          await handleLoadDashboard();
           break;
       }
     } catch (error) {
@@ -499,6 +520,17 @@ const handleBulkAdd = async (newItems: any[]) => {
       console.error("Error loading active carts:", error);
     }
   };
+  const handleLoadDashboard = async (force = false) => {
+    if (dashboardLoaded && !force) return;
+    try {
+      const data = await apiCall(`${API_BASE_URL}/stats/dashboard/${PRESELECTED_SHOP_ID}`);
+      setDashboardStats(data as DashboardStats);
+      setDashboardLoaded(true);
+    } catch (error) {
+      console.error("Failed to load dashboard stats:", error);
+    }
+  };
+
   // On-demand: Load orders when button is clicked
   const handleLoadOrders = async (force = false) => {
     if (ordersLoaded && !force) return; // Don't reload if already loaded
@@ -2120,7 +2152,11 @@ return (
                     </Button>
                     <div className="h-6 w-px bg-gray-200" />
                     <h1 className="text-xl font-bold text-gray-900 capitalize">
-                      {currentView === 'proforma' ? 'Proforma Invoices' : currentView}
+                      {currentView === 'proforma'
+                        ? 'Proforma Invoices'
+                        : currentView === 'dashboard'
+                          ? 'Analytics Dashboard'
+                          : currentView}
                     </h1>
                   </div>
                   <div className="flex items-center gap-4">
@@ -2194,6 +2230,14 @@ return (
                 summary={orderSummary}
               />
             )}
+            {currentView === "dashboard" && (
+              <Dashboard
+                stats={dashboardStats}
+                onRefresh={() => handleLoadDashboard(true)}
+                isLoading={isLoading}
+              />
+            )}
+
             {currentView === "history" && (
               <History
                 events={auditEvents}
