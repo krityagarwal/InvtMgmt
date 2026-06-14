@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Loader } from "lucide-react";
 import { Button } from "./ui/button";
-
+import { supabase } from "../lib/supabaseClient";
+import { toast } from "sonner";
 
 interface CategoryOption {
   id: string;
@@ -18,6 +19,7 @@ interface BulkRowProps {
 export const BulkRow = React.memo(({ row, categoryOptions, onUpdate, onRemove }: BulkRowProps) => {
   // Local state for instant typing
   const [localValues, setLocalValues] = useState(row);
+  const [isUploading, setIsUploading] = useState(false);
 
   // Sync local state if parent row changes (e.g., after a sync or clear)
   useEffect(() => {
@@ -29,6 +31,51 @@ export const BulkRow = React.memo(({ row, categoryOptions, onUpdate, onRemove }:
     setLocalValues((prev: any) => ({ ...prev, [field]: value }));
     // 2. Pass to parent for data integrity
     onUpdate(row.id, field, value);
+  };
+
+  // Handle image upload to Supabase Storage
+  const handleImageUpload = async (file: File) => {
+    try {
+      setIsUploading(true);
+      
+      // Create unique filename with sanitization
+      const timestamp = Date.now();
+      const randomStr = Math.random().toString(36).substring(2, 8);
+      // Sanitize filename: replace spaces and special chars with hyphens, keep only alphanumeric, hyphens, dots
+      const sanitizedName = file.name
+        .replace(/[^a-zA-Z0-9.-]/g, '-')
+        .replace(/-+/g, '-') // Replace multiple hyphens with single hyphen
+        .toLowerCase();
+      const fileName = `product-${timestamp}-${randomStr}-${sanitizedName}`;
+      
+      // Upload to Supabase storage
+      const { data, error } = await supabase.storage
+        .from('product-images')
+        .upload(fileName, file);
+      
+      if (error) {
+        console.error('Upload error:', error);
+        toast.error(`Failed to upload image: ${error.message}`);
+        return;
+      }
+      
+      // Get public URL
+      const { data: publicUrlData } = supabase.storage
+        .from('product-images')
+        .getPublicUrl(fileName);
+      
+      const publicUrl = publicUrlData.publicUrl;
+      
+      // Update the row with public URL
+      handleChange('photo_url', publicUrl);
+      toast.success('Image uploaded successfully');
+      
+    } catch (error) {
+      console.error('Upload error:', error);
+      toast.error('Failed to upload image');
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   // Keep financial behavior aligned with Inventory edit-row logic:
@@ -45,7 +92,7 @@ export const BulkRow = React.memo(({ row, categoryOptions, onUpdate, onRemove }:
 
     const baseCost = Number(rawValue);
     if (Number.isNaN(baseCost)) return;
-    const landingPrice = Math.round(baseCost * 1.05 * 100) / 100;
+    const landingPrice = Math.round(baseCost * 1.10 * 100) / 100;
     const sellingPrice = Math.round(landingPrice * 2.5);
 
     setLocalValues((prev: any) => ({
@@ -89,14 +136,20 @@ export const BulkRow = React.memo(({ row, categoryOptions, onUpdate, onRemove }:
           ) : (
             <Plus className="size-3 m-auto absolute inset-0 text-slate-300" />
           )}
+          {isUploading && (
+            <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+              <Loader className="size-4 text-white animate-spin" />
+            </div>
+          )}
           <input 
-            type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer"
+            type="file" 
+            accept="image/*" 
+            className="absolute inset-0 opacity-0 cursor-pointer" 
+            disabled={isUploading}
             onChange={(e) => {
               const file = e.target.files?.[0];
               if (file) {
-                const reader = new FileReader();
-                reader.onloadend = () => handleChange('photo_url', reader.result);
-                reader.readAsDataURL(file);
+                handleImageUpload(file);
               }
             }}
           />
@@ -152,7 +205,8 @@ export const BulkRow = React.memo(({ row, categoryOptions, onUpdate, onRemove }:
           type="number" step="any" 
           className="w-full h-10 px-3 text-right outline-none font-mono font-bold text-blue-600" 
           value={localValues.unit_price || ""} 
-          readOnly
+          onChange={(e) => handleChange('unit_price', e.target.value)}
+          //readOnly
           tabIndex={-1}
         />
       </td>

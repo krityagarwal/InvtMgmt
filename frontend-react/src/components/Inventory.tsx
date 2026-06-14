@@ -22,6 +22,7 @@ import { Dialog, DialogContent,
   DialogTitle,
   DialogFooter, } from "./ui/dialog";
 import { toast } from "sonner";
+import { supabase } from "../lib/supabaseClient";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -817,7 +818,7 @@ const handlePrintLabels = () => {
                             )}
                             {isEditing && (
                               <label className="absolute inset-0 bg-black/40 flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity">
-                                <input 
+                                {/* <input 
                                   type="file" 
                                   className="hidden" 
                                   onChange={(e) => {
@@ -829,7 +830,60 @@ const handlePrintLabels = () => {
                                       reader.readAsDataURL(file);
                                     }
                                   }} 
-                                />
+                                /> */}
+                                {isEditing && (
+                                <label className="absolute inset-0 bg-black/40 flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <input 
+                                    type="file" 
+                                    accept="image/*"
+                                    className="hidden" 
+                                    onChange={async (e) => {
+                                      const file = e.target.files?.[0];
+                                      if (!file) return;
+
+                                      try {
+                                        // Provide visual feedback during network request
+                                        toast.loading("Uploading product image...", { id: "table-image-upload" });
+
+                                        // 1. Generate a structured, unique filename to avoid bucket collisions
+                                        const timestamp = Date.now();
+                                        const randomStr = Math.random().toString(36).substring(2, 8);
+                                        const sanitizedName = file.name
+                                          .replace(/[^a-zA-Z0-9.-]/g, '-')
+                                          .replace(/-+/g, '-')
+                                          .toLowerCase();
+                                        const fileName = `product-${timestamp}-${randomStr}-${sanitizedName}`;
+
+                                        // 2. Upload raw file binary to your public bucket asset folder
+                                        const { data: uploadData, error: uploadError } = await supabase.storage
+                                          .from('product-images')
+                                          .upload(fileName, file);
+
+                                        if (uploadError) throw uploadError;
+
+                                        // 3. Request the static CDN web path link pointing to the asset
+                                        const { data: publicUrlData } = supabase.storage
+                                          .from('product-images')
+                                          .getPublicUrl(fileName);
+
+                                        const publicUrl = publicUrlData.publicUrl;
+
+                                        // 4. Update the row snapshot buffer with the clean URL string
+                                        setEditBuffer({ 
+                                          ...editBuffer, 
+                                          photo_url: publicUrl 
+                                        });
+
+                                        toast.success("Image uploaded successfully", { id: "table-image-upload" });
+                                      } catch (error: any) {
+                                        console.error("Table image upload error details:", error);
+                                        toast.error(error.message || "Failed to upload image", { id: "table-image-upload" });
+                                      }
+                                    }} 
+                                  />
+                                  <span className="text-[8px] text-white font-bold">CHANGE</span>
+                                </label>
+                              )}
                                 <span className="text-[8px] text-white font-bold">CHANGE</span>
                               </label>
                             )}
@@ -899,7 +953,7 @@ const handlePrintLabels = () => {
                                   return;
                                 }
                                 const baseCost = Number(val);
-                                const landingPrice = baseCost * 1.05; // Auto-calculate 5% overhead
+                                const landingPrice = baseCost * 1.10; // Auto-calculate 5% overhead
                                 const sellingPrice = landingPrice * 2.5; // Auto-calculate 2.5x margin
                                 
                                 setEditBuffer({ 
@@ -944,6 +998,7 @@ const handlePrintLabels = () => {
                                   selling_price: Math.round(manualLanding * 2.5) // Selling price still follows the rule
                                 });
                               }} 
+                              onFocus={(e) => e.target.select()} // Highlight on click
                             />
                             </div>
                           ) : (
@@ -955,13 +1010,28 @@ const handlePrintLabels = () => {
                           {isEditing ? (
                             <div className="flex items-center justify-start gap-1">
                               <span className="text-gray-400 text-[10px]">₹</span>
-                              <Input 
+                              {/* <Input 
                                 type="number" 
                                 className="h-7 w-20 text-xs text-left pl-1 font-mono" 
                                 value={data.selling_price} 
+                                onChange={(e) => setEditBuffer({ ...data, selling_price: Number(e.target.value) })} 
                                 //onChange={(e) => setEditBuffer({ ...data, selling_price: Number(e.target.value) })} 
-                                readOnly // Implementation of "not allowed" requirement
+                                //readOnly // Implementation of "not allowed" requirement
                                 tabIndex={-1}
+                              /> */}
+                              <Input 
+                                type="number" 
+                                className="h-7 w-20 text-xs text-left pl-1 font-mono font-bold text-blue-600 bg-white" 
+                                value={data.selling_price === 0 ? "" : data.selling_price} // Empty string intercept fallback
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val === "") {
+                                    setEditBuffer({ ...data, selling_price: 0 });
+                                    return;
+                                  }
+                                  setEditBuffer({ ...data, selling_price: Number(val) }); // Saves your custom manual pricing
+                                }}
+                                onFocus={(e) => e.target.select()} // Highlight on click
                               />
                             </div>
                           ) : (
