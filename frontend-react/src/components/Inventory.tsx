@@ -249,7 +249,10 @@ React.useEffect(() => {
       filters.godownQty.operator === "lt" ? product.godownStock < godownVal : true;
 
     // Final Combination
-    return matchesSearch && matchesCategory && matchesVendor && matchesDisplay && matchesGodown;
+    //return matchesSearch && matchesCategory && matchesVendor && matchesDisplay && matchesGodown;
+    // Final Combination: Show the item if it matches the search filters OR if it is actively checked!
+    const isExplicitlyChecked = Boolean(printSelection[product.id]);
+    return isExplicitlyChecked || (matchesSearch && matchesCategory && matchesVendor && matchesDisplay && matchesGodown);
   });
 
   const sortedProducts = React.useMemo(() => {
@@ -332,11 +335,24 @@ React.useEffect(() => {
   const godownItems = products.reduce((sum, p) => sum + p.godownStock, 0);
   const godownRatio = totalItems > 0 ? Math.round((godownItems / totalItems) * 100) : 0;
 
+  // const toggleSelection = (productId: string) => {
+  //   setPrintSelection(prev => {
+  //     const newSelection = { ...prev };
+  //     if (newSelection[productId]) delete newSelection[productId];
+  //     else newSelection[productId] = 1;
+  //     return newSelection;
+  //   });
+  // };
+
   const toggleSelection = (productId: string) => {
     setPrintSelection(prev => {
       const newSelection = { ...prev };
-      if (newSelection[productId]) delete newSelection[productId];
-      else newSelection[productId] = 1;
+      // Strict persistence check: if it exists, toggle it off; otherwise, track it
+      if (newSelection[productId]) {
+        delete newSelection[productId];
+      } else {
+        newSelection[productId] = 1; // Tracks selection state across search mutations
+      }
       return newSelection;
     });
   };
@@ -742,8 +758,13 @@ const handlePrintLabels = () => {
                   <TableHead className="w-[40px]">
                     <Checkbox 
                       // Show as checked only if all visible items are selected
+                      //checked={sortedProducts.length > 0 && sortedProducts.every(p => !!printSelection[p.id])}
+                      //onCheckedChange={toggleAll}
+
+                      // Checked state is bound dynamically to the current visible query array context
                       checked={sortedProducts.length > 0 && sortedProducts.every(p => !!printSelection[p.id])}
                       onCheckedChange={toggleAll}
+                      className="translate-y-[2px]"
                     />
                   </TableHead>
                   <TableHead className="w-[60px]">Image</TableHead>
@@ -793,12 +814,25 @@ const handlePrintLabels = () => {
                     const data = isEditing ? editBuffer : product;
                     const resolvedPhotoUrl = isRenderableImageUrl(data?.photo_url) ? data.photo_url : "";
                     return (
+                      // <TableRow 
+                      //   key={product.id} 
+                      //   className={`${printSelection[product.id] ? "bg-blue-50" : ""} ${isEditing ? "bg-blue-50/30 ring-1 ring-inset ring-blue-200" : ""}`}
+                      // >
+                      //   <TableCell>
+                      //     <Checkbox checked={!!printSelection[product.id]} onCheckedChange={() => toggleSelection(product.id)}/>
+                      //   </TableCell>
+
                       <TableRow 
                         key={product.id} 
-                        className={`${printSelection[product.id] ? "bg-blue-50" : ""} ${isEditing ? "bg-blue-50/30 ring-1 ring-inset ring-blue-200" : ""}`}
+                        className={`${printSelection[product.id] ? "bg-blue-50/60 font-medium" : ""} ${isEditing ? "bg-blue-50/30 ring-1 ring-inset ring-blue-200" : ""}`}
                       >
                         <TableCell>
-                          <Checkbox checked={!!printSelection[product.id]} onCheckedChange={() => toggleSelection(product.id)}/>
+                          <Checkbox 
+                            // Evaluates directly against the isolated printSelection memory cache
+                            checked={Boolean(printSelection[product.id])} 
+                            onCheckedChange={() => toggleSelection(product.id)}
+                            className="cursor-pointer"
+                          />
                         </TableCell>
                         
                         {/* IMAGE: With edit overlay if active */}

@@ -73,6 +73,7 @@ interface OrdersProps {
   onRecordPayment: (orderId: string, amount: number, method: string, notes?: string) => void;
   onWriteOff: (orderId: string, amount: number, reason?: string, notes?: string) => void;
   onDownloadInvoice: (orderId: string) => void;
+  onCancelOrder?: (orderId: string) => Promise<void> | void; // New callback handler tracking hook
   summary?: {
     totalRevenue: number;
     totalReceived: number;
@@ -82,7 +83,7 @@ interface OrdersProps {
   };
 }
 
-export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOffs, onRecordPayment, onWriteOff, onDownloadInvoice, summary }: OrdersProps) {
+export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOffs, onRecordPayment, onWriteOff, onDownloadInvoice, onCancelOrder, summary }: OrdersProps) {
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [paymentOrder, setPaymentOrder] = useState<Order | null>(null);
@@ -94,7 +95,13 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
   const [writeOffAmount, setWriteOffAmount] = useState<string>("");
   const [writeOffReason, setWriteOffReason] = useState<string>("Customer Waived");
   const [writeOffNotes, setWriteOffNotes] = useState<string>("");
-
+  const handleCancelClick = async (e: React.MouseEvent, order: Order) => {
+    e.stopPropagation(); // Stop row expansion when clicking the button
+    const confirmText = `Are you absolutely sure you want to cancel Order ${order.orderNumber}? \n\nThis will return all items back to Godown stock and zero out financial allocations.`;
+    if (window.confirm(confirmText)) {
+      onCancelOrder?.(order.id);
+    }
+  };
   const toggleExpand = (orderId: string) => {
     if (expandedOrderId !== orderId) {
       onFetchDetails(orderId); 
@@ -137,7 +144,7 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
     onWriteOff(writeOffOrder.id, amount, writeOffReason, writeOffNotes.trim() || undefined);
     setWriteOffModalOpen(false);
   };
-
+  const activeDisplayOrders = orders.filter((o) => o.status === "sold" || (o.status as string) === "cancelled");
   const soldOrders = orders.filter((o) => o.status === "sold");
   const totalRevenue = summary?.totalRevenue ?? soldOrders.reduce((sum, o) => sum + o.total, 0);
   const totalReceived = summary?.totalReceived ?? soldOrders.reduce((sum, o) => sum + (o.paidAmount || 0), 0);
@@ -145,11 +152,12 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
   const totalWriteOff = summary?.totalWriteOff ?? soldOrders.reduce((sum, o) => sum + (o.write_off_amount || 0), 0);
   const estimatedProfit = summary?.estimatedProfit ?? 0;
 
-  const getStatusColor = (status: Order["status"]) => {
+  const getStatusColor = (status: Order["status"]| "cancelled") => {
     switch (status) {
       case "bucket": return "bg-gray-400"; // Changed to gray for drafts
       case "pi": return "bg-yellow-500";  
       case "sold": return "bg-green-500";
+      case "cancelled": return "bg-red-500 text-white"; // Red alert design flag
       default: return "bg-gray-500";
     }
   };
@@ -213,16 +221,17 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
         <CardHeader><CardTitle>Order Management</CardTitle></CardHeader>
         <CardContent>
           <div className="mt-1 mb-3 text-xs text-slate-500 font-medium">
-            Showing {soldOrders.length} of {orders.length} records
+            Showing {activeDisplayOrders.length} of {orders.length} records
           </div>
           <OrderTable
-            orders={soldOrders}
+            orders={activeDisplayOrders}
             expandedOrderId={expandedOrderId}
             onToggleExpand={toggleExpand}
             getStatusColor={getStatusColor}
             onOpenPaymentModal={openPaymentModal}
             onOpenWriteOffModal={openWriteOffModal}
             onDownloadInvoice={onDownloadInvoice}
+            onCancelClick={handleCancelClick}
           />
         </CardContent>
       </Card>
@@ -375,7 +384,7 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
   );
 }
 
-function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, onOpenPaymentModal, onOpenWriteOffModal, onDownloadInvoice }: any) {
+function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, onOpenPaymentModal, onOpenWriteOffModal, onDownloadInvoice,onCancelClick }: any) {
   return (
     <Table>
       <TableHeader>
@@ -392,7 +401,7 @@ function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, o
         </TableRow>
       </TableHeader>
       <TableBody>
-        {orders.map((order: Order) => (
+        {/* {orders.map((order: Order) => (
           <React.Fragment key={order.id}>
             <TableRow className="cursor-pointer hover:bg-gray-50" onClick={() => onToggleExpand(order.id)}>
               <TableCell>
@@ -521,7 +530,167 @@ function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, o
               </TableRow>
             )}
           </React.Fragment>
-        ))}
+        ))} */}
+        {orders.map((order: Order) => {
+          const isCancelled = order.status === ("cancelled" as any);
+          return (
+            <React.Fragment key={order.id}>
+              <TableRow 
+                className={`cursor-pointer transition-colors ${
+                  isCancelled 
+                    ? "opacity-45 bg-slate-50 line-through hover:bg-slate-100/80" 
+                    : "hover:bg-gray-50"
+                }`} 
+                onClick={() => onToggleExpand(order.id)}
+              >
+                <TableCell>
+                  {expandedOrderId === order.id ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+                </TableCell>
+                <TableCell className="font-mono text-xs">{order.orderNumber}</TableCell>
+                <TableCell className={isCancelled ? "text-slate-400" : ""}>{order.customerName}</TableCell>
+                <TableCell>{order.date}</TableCell>
+                <TableCell>₹{order.total.toLocaleString()}</TableCell>
+                <TableCell className={isCancelled ? "text-slate-400" : "text-green-600"}>
+                  ₹{(order.paidAmount || 0).toLocaleString()}
+                </TableCell>
+                <TableCell className={`font-bold ${
+                  isCancelled 
+                    ? "text-slate-400" 
+                    : order.total - (order.paidAmount || 0) - (order.write_off_amount || 0) > 0 
+                      ? 'text-red-600' 
+                      : 'text-gray-900'
+                }`}>
+                  ₹{(order.total - (order.paidAmount || 0) - (order.write_off_amount || 0)).toLocaleString()}
+                </TableCell>
+                <TableCell>
+                  <Badge className={getStatusColor(order.status)}>{order.status}</Badge>
+                </TableCell>
+                <TableCell className="text-right">
+                  {!isCancelled && (order.total - (order.paidAmount || 0) - (order.write_off_amount || 0)) > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mr-2 h-7 text-[10px] font-bold uppercase"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenPaymentModal(order);
+                      }}
+                    >
+                      Record Payment
+                    </Button>
+                  )}
+                  {!isCancelled && (order.total - (order.paidAmount || 0) - (order.write_off_amount || 0)) > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mr-2 h-7 text-[10px] font-bold uppercase"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenWriteOffModal(order);
+                      }}
+                    >
+                      Write-Off
+                    </Button>
+                  )}
+                  {!isCancelled && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-[10px] font-bold uppercase text-red-500 hover:text-red-700 hover:bg-red-50 mr-2"
+                      onClick={(e) => onCancelClick(e, order)}
+                    >
+                      Cancel Order
+                    </Button>
+                  )}
+                  {order.status === "sold" && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="Download Invoice"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDownloadInvoice(order.id);
+                      }}
+                    >
+                      <Download className="size-4" />
+                    </Button>
+                  )}
+                </TableCell>
+              </TableRow>
+              
+              {expandedOrderId === order.id && (
+                <TableRow>
+                  <TableCell colSpan={9} className="bg-gray-50/50 p-0">
+                    <OrderDetailsView
+                      clientName={order.customerName}
+                      date={order.date}
+                      items={order.items || []}
+                      financial={order}
+                    />
+                    <div className="px-6 pb-6">
+                      <div className="rounded-lg border bg-white p-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-sm font-semibold">Payment History</h4>
+                          <span className="text-xs text-slate-500">
+                            {order.payments?.length || 0} record{(order.payments?.length || 0) === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {order.payments && order.payments.length > 0 ? (
+                            order.payments.map((payment) => (
+                              <div key={payment.id} className="flex items-center justify-between rounded-md border px-3 py-2 text-xs">
+                                <div>
+                                  <div className="font-medium text-slate-900">₹{payment.amount.toLocaleString()}</div>
+                                  <div className="text-slate-500">
+                                    {payment.created_at ? new Date(payment.created_at).toLocaleString() : "—"} · {payment.payment_method}
+                                  </div>
+                                  {payment.notes && (
+                                    <div className="text-slate-500">{payment.notes}</div>
+                                  )}
+                                </div>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-xs text-slate-500">No payments recorded yet.</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="px-6 pb-6">
+                      <div className="rounded-lg border bg-white p-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-sm font-semibold">Write-Off History</h4>
+                          <span className="text-xs text-slate-500">
+                            {order.writeOffs?.length || 0} record{(order.writeOffs?.length || 0) === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {order.writeOffs && order.writeOffs.length > 0 ? (
+                            order.writeOffs.map((entry) => (
+                              <div key={entry.id} className="flex items-center justify-between rounded-md border px-3 py-2 text-xs">
+                                <div>
+                                  <div className="font-medium text-slate-900">₹{entry.amount.toLocaleString()}</div>
+                                  <div className="text-slate-500">
+                                    {entry.created_at ? new Date(entry.created_at).toLocaleString() : "—"} · {entry.reason || "Write-off"}
+                                  </div>
+                                  {entry.notes && (
+                                    <div className="text-slate-500">{entry.notes}</div>
+                                  )}
+                                </div>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-xs text-slate-500">No write-offs recorded yet.</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )}
+            </React.Fragment>
+          );
+        })}
       </TableBody>
     </Table>
   );

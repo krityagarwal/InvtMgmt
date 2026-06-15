@@ -129,11 +129,15 @@ export default function App() {
 
   const viewRef = useRef(currentView);
 
+  
+
 useEffect(() => {
   if (currentView === "history") {
     handleLoadAuditEvents(auditEntityType);
   }
 }, [currentView]);
+
+
 
 useEffect(() => {
   const handleSecretShortcut = (e: KeyboardEvent) => {
@@ -1743,6 +1747,24 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     );
   };
 
+const handleCancelOrder = async (orderId: string) => {
+    try {
+      // 1. Call the backend transaction route we created earlier
+      const response = await apiCall(`${API_BASE_URL}/order/cancel/${orderId}`, {
+        method: "POST",
+      });
+
+      toast.success(response.message || "Order successfully cancelled and stock reverted!");
+
+      // 2. Refresh the active orders datagrid using your actual method name
+      await handleLoadOrders(true);
+      
+    } catch (err: any) {
+      console.error("Order cancellation failed:", err);
+      toast.error(err.message || "Failed to cancel the order.");
+    }
+  };
+
   const handleRecordPayment = async (orderId: string, amount: number, method: string, notes?: string) => {
     try {
       await apiCall(`${API_BASE_URL}/order/record-payment`, {
@@ -2227,6 +2249,7 @@ return (
                 onFetchWriteOffs={handleFetchWriteOffs}
                 onWriteOff={handleWriteOff}
                 onDownloadInvoice={handleDownloadInvoice}
+                onCancelOrder={handleCancelOrder}
                 summary={orderSummary}
               />
             )}
