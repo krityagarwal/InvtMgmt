@@ -988,7 +988,7 @@ const handlePrintLabels = () => {
                                 }
                                 const baseCost = Number(val);
                                 const landingPrice = baseCost * 1.10; // Auto-calculate 5% overhead
-                                const sellingPrice = landingPrice * 2.5; // Auto-calculate 2.5x margin
+                                const sellingPrice = landingPrice * 3; // Auto-calculate 3x margin
                                 
                                 setEditBuffer({ 
                                   ...data, 
@@ -1029,7 +1029,7 @@ const handlePrintLabels = () => {
                                 setEditBuffer({ 
                                   ...data, 
                                   overhead_expense: manualLanding,
-                                  selling_price: Math.round(manualLanding * 2.5) // Selling price still follows the rule
+                                  selling_price: Math.round(manualLanding * 3) // Selling price still follows the rule
                                 });
                               }} 
                               onFocus={(e) => e.target.select()} // Highlight on click

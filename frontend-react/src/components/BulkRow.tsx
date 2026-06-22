@@ -79,8 +79,8 @@ export const BulkRow = React.memo(({ row, categoryOptions, onUpdate, onRemove }:
   };
 
   // Keep financial behavior aligned with Inventory edit-row logic:
-  // Cost -> Landing(5%) -> Selling(2.5x, rounded)
-  // Landing (manual) -> Selling(2.5x, rounded)
+  // Cost -> Landing(5%) -> Selling(3x, rounded)
+  // Landing (manual) -> Selling(3x, rounded)
   const handleCostPriceChange = (rawValue: string) => {
     if (rawValue === "") {
       setLocalValues((prev: any) => ({ ...prev, cost_price: "", overhead: "", unit_price: "" }));
@@ -93,7 +93,7 @@ export const BulkRow = React.memo(({ row, categoryOptions, onUpdate, onRemove }:
     const baseCost = Number(rawValue);
     if (Number.isNaN(baseCost)) return;
     const landingPrice = Math.round(baseCost * 1.10 * 100) / 100;
-    const sellingPrice = Math.round(landingPrice * 2.5);
+    const sellingPrice = Math.round(landingPrice * 3);
 
     setLocalValues((prev: any) => ({
       ...prev,
@@ -116,7 +116,7 @@ export const BulkRow = React.memo(({ row, categoryOptions, onUpdate, onRemove }:
 
     const manualLanding = Number(rawValue);
     if (Number.isNaN(manualLanding)) return;
-    const sellingPrice = Math.round(manualLanding * 2.5);
+    const sellingPrice = Math.round(manualLanding * 3);
 
     setLocalValues((prev: any) => ({
       ...prev,
