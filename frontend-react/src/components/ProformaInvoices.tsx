@@ -1,472 +1,3 @@
-// import React, { useState, useRef, useEffect } from "react";
-// import { FileText, Calendar, User, ChevronDown, ChevronRight, Edit, Trash2, Receipt, Printer, Download } from "lucide-react";
-// import jsPDF from "jspdf";
-// import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
-// import { Badge } from "./ui/badge";
-// import { Button } from "./ui/button";
-// import html2canvas from "html2canvas";
-// import { toast } from "sonner";
-// import { GlobalLoader } from "./Loader";
-// import {
-//   Table,
-//   TableBody,
-//   TableCell,
-//   TableHead,
-//   TableHeader,
-//   TableRow,
-// } from "./ui/table";
-// import { OrderDetailsView } from "./ui/OrderDetailsView";
-// import { Product } from "./Scanner";
-
-// export interface ProformaInvoice {
-//   id: string;
-//   piNumber: string;
-//   clientName: string;
-//   items: { name: string; quantity: number; price: number; photo_url?: string; category?: string; attribute_metadata?: { label: string; qty: number }[] }[];
-//   discount: number;
-//   status: "draft" | "sent" | "negotiating" | "approved";
-//   createdAt: string;
-//   updatedAt: string;
-//   notes?: string;
-//   subtotal?: number;
-//   paidAmount: number;
-//   discount_amount?: number;
-//   discount_percent?: number;
-//   tax_percent?: number;
-//   tax_amount?: number;
-//   final_total?: number;
-//   total?: number;
-//   clientPhone?: string;        
-//   referralSource?: string; 
-//   deliveryAddress?: string; 
-//   photo_url?: string;
-//   attribute_metadata?: { label: string; qty: number }[] // Ensure this matches
-// }
-
-// interface ProformaInvoicesProps {
-//   invoices: ProformaInvoice[];
-//   products: Product[];
-//   onEditPI: (pi: ProformaInvoice) => void;
-//   onConvertToOrder: (pi: any) => void;
-//   onDeletePI: (piId: string) => void;
-//   onUpdateStatus: (piId: string, status: ProformaInvoice["status"]) => void;
-//   onFetchDetails: (orderId: string) => void;
-//   initialDownloadId: string | null; 
-//   onClearInitialDownload: () => void;
-// }
-
-// export function ProformaInvoices({ 
-//   invoices, 
-//   products,
-//   initialDownloadId, 
-//   onClearInitialDownload,
-//   onEditPI, 
-//   onConvertToOrder, 
-//   onDeletePI,
-//   onUpdateStatus,
-//   onFetchDetails
-// }: ProformaInvoicesProps) {
-//   const [expandedPIId, setExpandedPIId] = useState<string | null>(null);
-//   const [printingPI, setPrintingPI] = useState<ProformaInvoice | null>(null);
-//   const [downloadPI, setDownloadPI] = useState<string | null>(null);
-//   const [isLoading, setIsLoading] = useState(false);
-
-//   useEffect(() => {
-//     if (initialDownloadId) {
-//       setDownloadPI(initialDownloadId);
-//       onClearInitialDownload(); // Clear the signal in App.tsx
-//     }
-//   }, [initialDownloadId]);
-
-//   // PDF Trigger Effect: Handles data fetching and DOM readiness
-//   useEffect(() => {
-//     if (downloadPI) {
-//       const pi = invoices.find(inv => inv.id === downloadPI);
-      
-//       if (pi && (!pi.items || pi.items.length === 0)) {
-//         onFetchDetails(downloadPI);
-//         return; 
-//       }
-      
-//       if (pi && pi.items && pi.items.length > 0) {
-//         // Delay ensures React has mounted the PrintLayout into #printable-pi
-//         const timer = setTimeout(() => {
-//           handleDownloadPDF(pi);
-//         }, 600); 
-//         return () => clearTimeout(timer);
-//       }
-//     }
-//   }, [downloadPI, invoices]);
-
-//   useEffect(() => {
-//     if (printingPI && printingPI.items && printingPI.items.length > 0) {
-//       setTimeout(() => {
-//         window.print();
-//         setPrintingPI(null);
-//       }, 300);
-//     }
-//   }, [printingPI]);
-
-//   const handleDownloadPDF = async (pi: ProformaInvoice) => {
-//     const element = document.getElementById("printable-pi");
-    
-//     if (!element) {
-//       toast.error("Template rendering error");
-//       setDownloadPI(null);
-//       return; 
-//     }
-
-//     try {
-//       setIsLoading(true);
-      
-//       // Wait for all images inside the element to load
-//       const images = element.getElementsByTagName('img');
-//       const imagePromises = Array.from(images).map(img => {
-//         if (img.complete) return Promise.resolve();
-//         return new Promise(resolve => {
-//           img.onload = resolve;
-//           img.onerror = resolve; 
-//         });
-//       });
-
-//       await Promise.all(imagePromises);
-
-//       const canvas = await html2canvas(element, {
-//         scale: 2,
-//         useCORS: true,       
-//         allowTaint: false,   
-//         logging: false,       
-//         backgroundColor: "#ffffff",
-//         imageTimeout: 15000, 
-//       });
-
-//       const imgData = canvas.toDataURL("image/png");
-//       const pdf = new jsPDF("p", "mm", "a4");
-//       const pdfWidth = pdf.internal.pageSize.getWidth();
-//       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-
-//       pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
-//       pdf.save(`PI_${pi.piNumber}_${pi.clientName}.pdf`);
-      
-//       toast.success("PI Downloaded");
-//     } catch (err) {
-//       console.error("PDF generation failed:", err);
-//       toast.error("Failed to generate PDF");
-//     } finally {
-//       setDownloadPI(null); 
-//       setIsLoading(false);
-//     }
-//   };
-
-//   const toggleExpand = (piId: string) => {
-//     if (expandedPIId !== piId) {
-//       onFetchDetails(piId);
-//       setExpandedPIId(piId);
-//     } else {
-//       setExpandedPIId(null);
-//     }
-//   };
-
-//   return (
-//     <div className="space-y-6">
-//       {isLoading && <GlobalLoader />}
-      
-//       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 print:hidden">
-//         <Card>
-//           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-//             <CardTitle className="text-sm font-medium">Total PIs</CardTitle>
-//             <FileText className="size-4 text-gray-500" />
-//           </CardHeader>
-//           <CardContent>
-//             <div className="text-2xl font-bold">{invoices.length}</div>
-//           </CardContent>
-//         </Card>
-//       </div>
-
-//       <Card className="print:hidden">
-//         <CardHeader><CardTitle>Proforma Invoice Management</CardTitle></CardHeader>
-//         <CardContent>
-//           <PITable 
-//             invoices={invoices}
-//             products={products}
-//             expandedPIId={expandedPIId}
-//             onToggleExpand={toggleExpand}
-//             onEditPI={onEditPI}
-//             onConvertToOrder={onConvertToOrder}
-//             onDeletePI={onDeletePI}
-//             onUpdateStatus={onUpdateStatus}
-//             onFetchDetails={onFetchDetails}
-//             onSetDownloadPI={setDownloadPI}
-//             onSetPrintingPI={setPrintingPI}
-//           />
-//         </CardContent>
-//       </Card>
-
-//       {/* Visible only during window.print() */}
-//       <div className="hidden print:block">
-//         {(printingPI || invoices.find(inv => inv.id === downloadPI)) && (
-//           <PrintLayout pi={printingPI || invoices.find(inv => inv.id === downloadPI)} />
-//         )}
-//       </div>
-
-//       {/* Hidden container for PDF capture - Uses HEX colors to avoid oklch errors */}
-//       <div 
-//         id="printable-pi" 
-//         style={{ 
-//           position: 'absolute', 
-//           top: '-10000px', 
-//           left: '-10000px',
-//           backgroundColor: '#ffffff',
-//           color: '#000000',
-//           width: '210mm'
-//         }}
-//       >
-//         {downloadPI && (
-//           <PrintLayout pi={invoices.find(inv => inv.id === downloadPI)} />
-//         )}
-//       </div>
-//     </div>
-//   );
-// }
-
-// // Sanitized Layout: All colors converted to HEX to prevent html2canvas oklch crash
-// function PrintLayout({ pi }: { pi?: ProformaInvoice }) {
-//   if (!pi) return null;
-  
-//   const subtotal = pi.subtotal || (pi.items?.reduce((sum, i) => sum + i.price * i.quantity, 0) || 0);
-//   const discountAmount = pi.discount_amount || (subtotal * (pi.discount_percent || pi.discount || 0) / 100);
-//   const taxableAmount = subtotal - discountAmount;
-//   const taxAmount = pi.tax_amount || (taxableAmount * (pi.tax_percent || 18) / 100);
-//   const finalTotal = pi.final_total || (taxableAmount + taxAmount);
-
-// // LOG: Check what data is actually present when the PDF is generated
-//   console.log("Printing PI Data:", pi);
-//   console.log("First Item Photo:", pi.items?.[0]?.photo_url);
-//   console.log("First Item Attributes:", pi.items?.[0]?.attribute_metadata);
-
-//   return (
-//     <div style={{ backgroundColor: '#ffffff', color: '#000000', padding: '40px', fontFamily: 'sans-serif' }}>
-//       {/* Business Header */}
-//       <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '4px solid #1e3a8a', paddingBottom: '24px', marginBottom: '32px' }}>
-//         <div>
-//           <h1 style={{ fontSize: '36px', fontWeight: '900', color: '#1e3a8a', margin: 0, textTransform: 'uppercase' }}>The Light Code</h1>
-//           <p style={{ fontSize: '11px', color: '#374151', marginTop: '8px', maxWidth: '350px', lineHeight: '1.5' }}>
-//             3RD FLOOR, DWARIKA HEIGHTS, EASTERN BYPASS, <br />
-//             DON BOSCO COLONY, SILIGURI, WEST BENGAL - 734008
-//           </p>
-//           <p style={{ fontSize: '12px', fontWeight: 'bold', marginTop: '8px', color: '#1e40af' }}>GSTIN: 19AAHCT0000A1Z5</p>
-//         </div>
-//         <div style={{ textAlign: 'right' }}>
-//           <h2 style={{ fontSize: '24px', fontWeight: 'bold', color: '#9ca3af', textTransform: 'uppercase', margin: 0 }}>Proforma Invoice</h2>
-//           <p style={{ fontSize: '14px', fontFamily: 'monospace', fontWeight: 'bold', marginTop: '4px' }}>Ref: #{pi.piNumber}</p>
-//           <p style={{ fontSize: '14px', marginTop: '4px' }}>Date: {pi.createdAt}</p>
-//         </div>
-//       </div>
-
-//       {/* Customer Details */}
-//       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '48px', marginBottom: '40px' }}>
-//         <div style={{ padding: '16px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-//           <h3 style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', color: '#2563eb', marginBottom: '8px' }}>Bill To:</h3>
-//           <p style={{ fontWeight: 'bold', fontSize: '18px', margin: 0 }}>{pi.clientName}</p>
-//           <p style={{ fontSize: '14px', marginTop: '8px' }}>Phone: {pi.clientPhone || "N/A"}</p>
-//         </div>
-//         <div style={{ padding: '16px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0', textAlign: 'right' }}>
-//           <h3 style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', color: '#2563eb', marginBottom: '8px' }}>Delivery Address:</h3>
-//           <p style={{ fontSize: '14px', fontStyle: 'italic', lineHeight: '1.4' }}>{pi.deliveryAddress || "Store Pickup"}</p>
-//         </div>
-//       </div>
-
-//       {/* Table */}
-//       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-//         <thead>
-//           <tr style={{ borderTop: '2px solid #000000', borderBottom: '2px solid #000000', backgroundColor: '#f9fafb' }}>
-//             <th style={{ padding: '12px 8px', fontSize: '10px', textAlign: 'left', textTransform: 'uppercase' }}>Photo</th>
-//             <th style={{ padding: '12px 8px', fontSize: '10px', textAlign: 'left', textTransform: 'uppercase' }}>Description</th>
-//             <th style={{ padding: '12px 8px', fontSize: '10px', textAlign: 'center', textTransform: 'uppercase' }}>Qty</th>
-//             <th style={{ padding: '12px 8px', fontSize: '10px', textAlign: 'right', textTransform: 'uppercase' }}>Price</th>
-//             <th style={{ padding: '12px 8px', fontSize: '10px', textAlign: 'right', textTransform: 'uppercase' }}>Total</th>
-//           </tr>
-//         </thead>
-//         <tbody>
-//           {pi.items?.map((item: any, idx: number) => (
-//             <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
-//               <td style={{ padding: '16px 8px' }}>
-//                 <div style={{ width: '80px', height: '80px', border: '1px solid #e2e8f0', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-//                   <img src={item.photo_url || "https://placehold.co/100x100"} style={{ maxWidth: '100%', maxHeight: '100%' }} crossOrigin="anonymous" />
-//                 </div>
-//               </td>
-//               <td style={{ padding: '16px 8px' }}>
-//                 <p style={{ fontWeight: 'bold', fontSize: '14px', margin: 0, textTransform: 'uppercase' }}>{item.name}</p>
-//                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '8px' }}>
-//                   {item.attribute_metadata?.map((attr: any, i: number) => (
-//                     <span key={i} style={{ fontSize: '9px', backgroundColor: '#f1f5f9', padding: '2px 8px', borderRadius: '4px', border: '1px solid #e2e8f0' }}>{attr.label}: {attr.qty}</span>
-//                   ))}
-//                 </div>
-//               </td>
-//               <td style={{ padding: '16px 8px', textAlign: 'center' }}>{item.quantity}</td>
-//               <td style={{ padding: '16px 8px', textAlign: 'right' }}>₹{item.price.toLocaleString()}</td>
-//               <td style={{ padding: '16px 8px', textAlign: 'right', fontWeight: 'bold' }}>₹{(item.price * item.quantity).toLocaleString()}</td>
-//             </tr>
-//           ))}
-//         </tbody>
-//       </table>
-
-//       {/* Totals */}
-//       <div style={{ marginTop: '40px', display: 'flex', justifyContent: 'flex-end' }}>
-//         <div style={{ width: '320px' }}>
-//           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', paddingBottom: '4px' }}>
-//             <span>Sub-Total</span>
-//             <span style={{ fontWeight: 'bold' }}>₹{subtotal.toLocaleString()}</span>
-//           </div>
-//           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#dc2626', paddingBottom: '4px' }}>
-//             <span>Discount ({pi.discount_percent || pi.discount}%)</span>
-//             <span style={{ fontWeight: 'bold' }}>-₹{discountAmount.toLocaleString()}</span>
-//           </div>
-//           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>
-//             <span>GST ({pi.tax_percent || 18}%)</span>
-//             <span style={{ fontWeight: 'bold' }}>₹{taxAmount.toLocaleString()}</span>
-//           </div>
-//           <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '12px', borderTop: '2px solid #1e3a8a' }}>
-//             <span style={{ fontSize: '18px', fontWeight: '900', color: '#1e3a8a' }}>GRAND TOTAL</span>
-//             <span style={{ fontSize: '20px', fontWeight: '900', color: '#1e3a8a' }}>₹{finalTotal.toLocaleString()}</span>
-//           </div>
-//         </div>
-//       </div>
-//     </div>
-//   );
-// }
-
-// function PITable({ 
-//   invoices, 
-//   products= [], 
-//   expandedPIId, 
-//   onToggleExpand, 
-//   onEditPI, 
-//   onConvertToOrder, 
-//   onDeletePI, 
-//   onUpdateStatus, 
-//   onFetchDetails, 
-//   onSetDownloadPI, 
-//   onSetPrintingPI 
-// }: any) {
-//   return (
-//     <Table>
-//       <TableHeader>
-//         <TableRow>
-//           <TableHead className="w-[40px]"></TableHead>
-//           <TableHead>PI #</TableHead>
-//           <TableHead>Client</TableHead>
-//           <TableHead>Status</TableHead>
-//           <TableHead className="text-right">Total</TableHead>
-//           <TableHead className="text-right">Paid</TableHead> 
-//           <TableHead className="text-right">Actions</TableHead>
-//         </TableRow>
-//       </TableHeader>
-//       <TableBody>
-//         {invoices.map((pi: ProformaInvoice) => {
-//           const hasShortage = pi.items?.some(item => {
-//             const masterProduct = products.find((p: any) => 
-//               p.barcode?.toLowerCase().trim() === item.name?.toLowerCase().trim());
-//             if (!masterProduct) return false;
-//             const availableStock = (masterProduct.displayStock || 0) + (masterProduct.godownStock || 0);
-//             return item.quantity > availableStock;
-//           });
-
-//           return (
-//             <React.Fragment key={pi.id}>
-//               <TableRow className="cursor-pointer hover:bg-gray-50" onClick={() => onToggleExpand(pi.id)}>
-//                 <TableCell>
-//                   {expandedPIId === pi.id ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-//                 </TableCell>
-//                 <TableCell className="font-mono text-sm">{pi.piNumber}</TableCell>
-//                 <TableCell className="font-medium">{pi.clientName}</TableCell>
-//                 <TableCell>
-//                   <div className="flex flex-col gap-1.5 items-start">
-//                     <Badge variant="outline" className="text-[10px]">{pi.status}</Badge>
-//                     {hasShortage && (
-//                       <Badge className="bg-red-100 text-red-700 border-red-200 text-[9px] font-bold py-0 leading-tight">
-//                         Stock Shortage
-//                       </Badge>
-//                     )}
-//                   </div>
-//                 </TableCell>
-//               <TableCell className="text-right font-medium">
-//                 ₹{(pi.total ?? 0).toLocaleString()}
-//               </TableCell>
-//               <TableCell className="text-right">
-//                 <span className={(pi.paidAmount ?? 0) > 0 ? "text-green-600 font-semibold" : "text-gray-400"}>
-//                   ₹{(pi.paidAmount ?? 0).toLocaleString()}
-//                 </span>
-//               </TableCell>
-//                 <TableCell className="text-right">
-//                   <div className="flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
-//                     <Button 
-//                       variant="ghost" 
-//                       size="icon" 
-//                       onClick={(e) => {
-//                         e.stopPropagation();
-//                         onSetDownloadPI(pi.id);
-//                       }}
-//                       title="Download PI"
-//                     >
-//                       <Download className="size-4" />
-//                     </Button>
-//                     <Button 
-//                       variant="ghost" 
-//                       size="icon" 
-//                       onClick={(e) => {
-//                         e.stopPropagation();
-//                         onSetPrintingPI(pi);
-//                       }}
-//                       title="Print PI"
-//                     >
-//                       <Printer className="size-4" />
-//                     </Button>
-//                     <Button 
-//                       variant="ghost" 
-//                       size="icon" 
-//                       onClick={(e) => {
-//                         e.stopPropagation();
-//                         onEditPI(pi);
-//                       }}
-//                     >
-//                       <Edit className="size-4" />
-//                     </Button>
-//                     <Button variant="ghost" size="icon" onClick={() => onDeletePI(pi.id)}><Trash2 className="size-4 text-red-500" /></Button>
-//                   </div>
-//                 </TableCell>
-//               </TableRow>
-              
-//               {expandedPIId === pi.id && (
-//                 <TableRow>
-//                   <TableCell colSpan={7} className="bg-gray-50/50 p-0">
-//                     <OrderDetailsView
-//                       clientName={pi.clientName}
-//                       date={pi.createdAt}
-//                       items={pi.items || []}
-//                       financial={pi}
-//                       actions={
-//                         <Button 
-//                           size="sm" 
-//                           className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300" 
-//                           onClick={() => onConvertToOrder(pi)}
-//                           disabled={hasShortage}
-//                         >
-//                           {hasShortage ? "Insufficient Stock" : "Convert to Sale"}
-//                         </Button>
-//                       }
-//                     />
-//                   </TableCell>
-//                 </TableRow>
-//               )}
-//             </React.Fragment>
-//           );
-//         })}
-//       </TableBody>
-//     </Table>
-//   );
-// }
-
 import React, { useState, useRef, useEffect } from "react";
 import { FileText, Calendar, User, ChevronDown, ChevronRight, Edit, Trash2, Receipt, Printer, Download } from "lucide-react";
 import jsPDF from "jspdf";
@@ -524,6 +55,7 @@ interface ProformaInvoicesProps {
   onFetchDetails: (orderId: string) => void;
   initialDownloadId: string | null; 
   onClearInitialDownload: () => void;
+  onDownloadPIPDF: (pi: ProformaInvoice) => Promise<void>; // Injects central multi-page method
 }
 export function ProformaInvoices({ 
   invoices, 
@@ -534,39 +66,21 @@ export function ProformaInvoices({
   onConvertToOrder, 
   onDeletePI,
   onUpdateStatus,
-  onFetchDetails
+  onFetchDetails,
+  onDownloadPIPDF // Destructure the centralized executor
 }: ProformaInvoicesProps) {
   const [expandedPIId, setExpandedPIId] = useState<string | null>(null);
   const [printingPI, setPrintingPI] = useState<ProformaInvoice | null>(null);
-  const [downloadPI, setDownloadPI] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [downloadPIId, setDownloadPIId] = useState<string | null>(null);
   useEffect(() => {
     if (initialDownloadId) {
-      // From cart "PI" action: open in expanded view for review first.
       setExpandedPIId(initialDownloadId);
       onFetchDetails(initialDownloadId);
-      onClearInitialDownload(); // Clear the signal in App.tsx
+      onClearInitialDownload();
     }
   }, [initialDownloadId]);
-  // PDF Trigger Effect: Handles data fetching and DOM readiness
-  useEffect(() => {
-    if (downloadPI) {
-      const pi = invoices.find(inv => inv.id === downloadPI);
-      
-      if (pi && (!pi.items || pi.items.length === 0)) {
-        onFetchDetails(downloadPI);
-        return; 
-      }
-      
-      if (pi && pi.items && pi.items.length > 0) {
-        // Delay ensures React has mounted the PrintLayout into #printable-pi
-        const timer = setTimeout(() => {
-          handleDownloadPDF(pi);
-        }, 600); 
-        return () => clearTimeout(timer);
-      }
-    }
-  }, [downloadPI, invoices]);
+
   useEffect(() => {
     if (printingPI && printingPI.items && printingPI.items.length > 0) {
       setTimeout(() => {
@@ -575,51 +89,7 @@ export function ProformaInvoices({
       }, 300);
     }
   }, [printingPI]);
-  const handleDownloadPDF = async (pi: ProformaInvoice) => {
-    const element = document.getElementById("printable-pi");
-    
-    if (!element) {
-      toast.error("Template rendering error");
-      setDownloadPI(null);
-      return; 
-    }
-    try {
-      setIsLoading(true);
-      
-      // Wait for all images inside the element to load
-      const images = element.getElementsByTagName('img');
-      const imagePromises = Array.from(images).map(img => {
-        if (img.complete) return Promise.resolve();
-        return new Promise(resolve => {
-          img.onload = resolve;
-          img.onerror = resolve; 
-        });
-      });
-      await Promise.all(imagePromises);
-      const canvas = await html2canvas(element, {
-        scale: 2,
-        useCORS: true,       
-        allowTaint: false,   
-        logging: false,       
-        backgroundColor: "#ffffff",
-        imageTimeout: 15000, 
-      });
-      const imgData = canvas.toDataURL("image/png");
-      const pdf = new jsPDF("p", "mm", "a4");
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-      pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`PI_${pi.piNumber}_${pi.clientName}.pdf`);
-      
-      toast.success("PI Downloaded");
-    } catch (err) {
-      console.error("PDF generation failed:", err);
-      toast.error("Failed to generate PDF");
-    } finally {
-      setDownloadPI(null); 
-      setIsLoading(false);
-    }
-  };
+
   const toggleExpand = (piId: string) => {
     if (expandedPIId !== piId) {
       onFetchDetails(piId);
@@ -628,6 +98,38 @@ export function ProformaInvoices({
       setExpandedPIId(null);
     }
   };
+
+// The Download Orchestration Engine
+  useEffect(() => {
+    if (!downloadPIId) return;
+
+    const targetPI = invoices.find((inv) => inv.id === downloadPIId);
+    if (!targetPI) return;
+
+    // Condition A: Line items are missing -> Fetch them and wait for state reload
+    if (!targetPI.items || targetPI.items.length === 0) {
+      onFetchDetails(downloadPIId);
+      return; 
+    }
+
+    // Condition B: Items exist -> Trigger PDF creation inside a delayed macro-task
+    // The delay gives the off-screen #printable-pi-preview element a tick to build out the inner rows
+    const renderTimeout = setTimeout(async () => {
+      try {
+        setIsLoading(true);
+        // Temporarily expand row if hidden so elements are populated in DOM
+        setExpandedPIId(downloadPIId); 
+        await onDownloadPIPDF(targetPI);
+      } catch (err) {
+        console.error("PDF engine failure:", err);
+      } finally {
+        setIsLoading(false);
+        setDownloadPIId(null); // Dequeue download task loop lock
+      }
+    }, 400);
+
+    return () => clearTimeout(renderTimeout);
+  }, [downloadPIId, invoices]);
   return (
     <div className="space-y-6">
       {isLoading && <GlobalLoader />}
@@ -656,33 +158,30 @@ export function ProformaInvoices({
             onDeletePI={onDeletePI}
             onUpdateStatus={onUpdateStatus}
             onFetchDetails={onFetchDetails}
-            onSetDownloadPI={setDownloadPI}
+            onDownloadClick={(pi: ProformaInvoice) => setDownloadPIId(pi.id)}
             onSetPrintingPI={setPrintingPI}
           />
         </CardContent>
       </Card>
-      {/* Visible only during window.print() */}
-      <div className="hidden print:block">
-        {(printingPI || invoices.find(inv => inv.id === downloadPI)) && (
-          <PrintLayout pi={printingPI || invoices.find(inv => inv.id === downloadPI)} />
-        )}
-      </div>
-      {/* Hidden container for PDF capture - Uses HEX colors to avoid oklch errors */}
-      <div 
-        id="printable-pi" 
-        style={{ 
-          position: 'absolute', 
-          top: '-10000px', 
-          left: '-10000px',
-          backgroundColor: '#ffffff',
-          color: '#000000',
-          width: '210mm'
-        }}
-      >
-        {downloadPI && (
-          <PrintLayout pi={invoices.find(inv => inv.id === downloadPI)} />
-        )}
-      </div>
+      {/* Target Preview Node: If a download is processing or expanded, mount layout */}
+      {(downloadPIId || expandedPIId) && (
+        <div
+          id="printable-pi-preview"
+          style={{
+            position: "absolute",
+            top: "-10000px",
+            left: "-10000px",
+            backgroundColor: "#ffffff",
+            color: "#000000",
+            width: "210mm",
+          }}
+        >
+          <PrintLayout 
+            pi={invoices.find(inv => inv.id === (downloadPIId || expandedPIId))} 
+            docType="PI" 
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -886,7 +385,7 @@ function PITable({
   onDeletePI, 
   onUpdateStatus, 
   onFetchDetails, 
-  onSetDownloadPI, 
+  onDownloadClick, 
   onSetPrintingPI 
 }: any) {
   return (
@@ -944,7 +443,7 @@ function PITable({
                       size="icon" 
                       onClick={(e) => {
                         e.stopPropagation();
-                        onSetDownloadPI(pi.id);
+                        onDownloadClick(pi); // Fires central multipage engine smoothly
                       }}
                       title="Download PI"
                     >

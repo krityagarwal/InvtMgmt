@@ -60,15 +60,15 @@ export default function App() {
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
   const [pendingQuantity, setPendingQuantity] = useState<number>(1); // New state
   const [pendingAttribute, setPendingAttribute] = useState<string>("None");
+  const [pendingCartItems, setPendingCartItems] = useState<PendingCartItem[] | null>(null);
+  const [pendingContinuation, setPendingContinuation] = useState<(() => void) | null>(null);
   const [newClientName, setNewClientName] = useState("");
   const [editingPI, setEditingPI] = useState<ProformaInvoice | null>(null);
   const proformaOrders = orders.filter(o => o.status === 'pi');
   const [isLoading, setIsLoading] = useState(false);
   const [initializing, setInitializing] = useState(true);
   const [currentView, setCurrentView] = useState<View>("login");
-  const [inventoryLoaded, setInventoryLoaded] = useState(false);
   const [activeCartLoaded, setActiveCartLoaded] = useState(false);
-  const [ordersLoaded, setOrdersLoaded] = useState(false);
   const [clientPhone, setClientPhone] = useState("");
   const [referralSource, setReferralSource] = useState("");
   const [deliveryAddress, setDeliveryAddress] = useState("");
@@ -129,7 +129,6 @@ export default function App() {
 
   const viewRef = useRef(currentView);
 
-  
 
 useEffect(() => {
   if (currentView === "history") {
@@ -268,9 +267,9 @@ useEffect(() => {
         const detail = errorData?.detail;
         const status = response.status;
         const statusText = response.statusText || "Request failed";
-        const message = detail
-          ? `${status} ${statusText}: ${detail}`
-          : `${status} ${statusText}`;
+        // Prioritize the backend's 'detail' message for user-facing errors.
+        // Fallback to the full status text for other errors.
+        const message = detail || `${status} ${statusText}`;
         throw new Error(message);
       }
       return await response.json(); 
@@ -460,7 +459,7 @@ const handleBulkAdd = async (newItems: any[]) => {
       limit: paginationInfo.limit,
       hasMore: paginationInfo.hasMore
     });
-    setInventoryLoaded(true);
+    setInventoryReady(true);
   }, [inventoryFilters]);
 
   const handleLoadMoreInventory = async () => {
@@ -525,7 +524,6 @@ const handleBulkAdd = async (newItems: any[]) => {
     }
   };
   const handleLoadDashboard = async (force = false) => {
-    if (dashboardLoaded && !force) return;
     try {
       const data = await apiCall(`${API_BASE_URL}/stats/dashboard/${PRESELECTED_SHOP_ID}`);
       setDashboardStats(data as DashboardStats);
@@ -535,9 +533,7 @@ const handleBulkAdd = async (newItems: any[]) => {
     }
   };
 
-  // On-demand: Load orders when button is clicked
   const handleLoadOrders = async (force = false) => {
-    if (ordersLoaded && !force) return; // Don't reload if already loaded
     try {
       const [data, summary] = await Promise.all([
         apiCall(`${API_BASE_URL}/orders/list/${PRESELECTED_SHOP_ID}`),
@@ -569,7 +565,6 @@ const handleBulkAdd = async (newItems: any[]) => {
         totalWriteOff: Number(summary.total_write_off) || 0,
         estimatedProfit: Number(summary.estimated_profit) || 0,
       });
-      setOrdersLoaded(true);
     } catch (error) {
       console.error("Failed to load orders:", error);
     }
@@ -725,65 +720,52 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     }
   };
 
-  const handleCreateCart = async (clientName: string, quantity: number = 1) => {
+  const handleCreateCart = async (clientName: string) => {
     try {
-      // Create the metadata array for the first item being added
-      const initialMetadata = [{ label: pendingAttribute || "None", qty: quantity }];
-      // 1. Single API call creates both the Order and the first Item
       const data = await apiCall(`${API_BASE_URL}/basket/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           shop_id: PRESELECTED_SHOP_ID,
           client_name: clientName,
-          initial_product_id: pendingProduct?.id, // Pass the scanned item ID
-          qty: quantity, // Send the actual quantity selected in the stepper
           client_phone: clientPhone || null,        // Match interface
           referral_source: referralSource,  // Match interface
-          delivery_address: deliveryAddress || null, // Match interface
-          attribute_metadata: initialMetadata
+          delivery_address: deliveryAddress || null
         }),
       });
 
-      // 2. Prepare the items array for local state immediately
-      const initialItems = pendingProduct ? [{ 
-        id: pendingProduct.id, 
-        name: pendingProduct.name, 
-        price: pendingProduct.price, 
-        quantity: quantity,
-        stock: pendingProduct.stock,
-        attribute_metadata: initialMetadata
-      }] : [];
-
-      // 3. Construct the full Cart object once
       const newCart: ClientCart = {
         id: data.order_id,
         clientName: data.client_name,
         clientPhone: clientPhone,
         referralSource: referralSource,
         deliveryAddress: deliveryAddress || "",
-        items: initialItems,
+        items: [], // Items will be fetched on next view or interaction
         createdAt: new Date().toISOString(),
         discount: 0, 
         extraDiscount: 0,
         tax: 0
       };
 
-      // 4. Update all states in a single batch
       setClientCarts((prev) => [...prev, newCart]);
       setActiveCartId(data.order_id);
       setClientPhone("");
       setReferralSource("");
       setDeliveryAddress("");
       setSearchResult(null);
-      setPendingQuantity(1);
       setPendingProduct(null);
       setPendingAttribute("None");
       setShowClientDialog(false); // Close the dialog
       
-      toast.success(`Session started for ${clientName}${pendingProduct ? ` with ${pendingProduct.name}` : ''}`);
-    } catch (error) {
-      // apiCall handles the error toast automatically
+      toast.success(`Session started for ${clientName}.`);
+
+      if (pendingContinuation) {
+        pendingContinuation();
+        setPendingContinuation(null);
+      }
+      
+    }
+ catch (error) {
       console.error("Cart creation failed:", error);
     }
 };
@@ -791,24 +773,19 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
   const handleSelectExistingCart = (cartId: string) => {
     setActiveCartId(cartId);
     setShowClientDialog(false);
-    
-    // If there was a pending product, add it now
-    if (pendingProduct) {
-      setTimeout(() => {
-        handleAddToCart(pendingProduct, pendingQuantity, pendingAttribute);
-        // Cleanup pending states
-        setPendingProduct(null);
-        setPendingQuantity(1);
-        setPendingAttribute("None"); // Reset to default
-      }, 100);
+
+    if (pendingContinuation) {
+      pendingContinuation();
+      setPendingContinuation(null);
+    } else if (pendingProduct) {
+      handleAddToCart(pendingProduct, pendingQuantity, pendingAttribute);
     }
   };
 
   const handleCreateNewCartFromDialog = () => {
     if (newClientName.trim()) {
-      handleCreateCart(newClientName.trim(), pendingQuantity);
+      handleCreateCart(newClientName.trim());
       setNewClientName("");
-      setPendingQuantity(1); // Reset to default
       setShowClientDialog(false);
     }
   };
@@ -1895,258 +1872,37 @@ const handleCancelOrder = async (orderId: string) => {
     );
   };
 
+  const handleGeneratePIPDF = async (pi: ProformaInvoice) => {
+    try {
+      setIsLoading(true);
+      const pdf = await renderDocumentPdf(pi, "PI");
+      pdf.save(`PI_${pi.piNumber}_${pi.clientName}.pdf`);
+      toast.success("PI Downloaded");
+    } catch (error) {
+      console.error("PI PDF generation failed:", error);
+      toast.error("Failed to generate PI PDF.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDeleteItem = async (productId: string) => {
+    try {
+      await apiCall(`${API_BASE_URL}/inventory/${productId}`, {
+        method: "DELETE",
+      });
+      
+      setProducts((prev) => prev.filter((p) => p.id !== productId));
+      
+      toast.success("Product deleted successfully.");
+    } catch (error) {
+      console.error("Failed to delete product:", error);
+      // The apiCall function will show a toast on failure
+    }
+  };
+
   // Handle Loading State
   if (initializing) return <GlobalLoader />;
-
-  // IF NOT LOGGED IN -> Show Login Page
-  // if (!session) {
-  //   return <LoginForm />;
-  // }
-
-  // // 2. HOME VIEW CHECK (Add this block)
-  // if (currentView === "home") {
-  //   return (
-  //     <>
-  //       <Toaster />
-  //       <HomeScreen onNavigate={(view: any) => setCurrentView(view)} 
-  //         cartCount={clientCarts.length}/>
-  //     </>
-  //   );
-  //}
-
-  // return (
-  //   <div className="min-h-screen bg-gray-50">
-  //     <Toaster />
-
-  //     {isLoading && <GlobalLoader />}
-
-  //     {(currentView as string) === "home" ? (
-  //       <HomeScreen 
-  //         onNavigate={(view) => setCurrentView(view as View)} 
-  //         cartCount={clientCarts.length} 
-  //       />
-  //     ) : (
-  //       <>
-  //         <header className="bg-white border-b sticky top-0 z-50">
-  //           <div className="max-w-7xl mx-auto px-6 py-4">
-  //             <div className="flex items-center justify-between">
-  //               {/* Left Side: The only way back and the current context */}
-  //               <div className="flex items-center gap-4">
-  //                 <Button
-  //                   variant="ghost"
-  //                   onClick={() => setCurrentView("home")}
-  //                   className="text-gray-600 hover:text-blue-600 transition-colors px-2"
-  //                 >
-  //                   <Home className="size-5 mr-2" />
-  //                   <span className="font-semibold">Dashboard</span>
-  //                 </Button>
-  //                 <div className="h-6 w-px bg-gray-200" />
-  //                 <h1 className="text-xl font-bold text-gray-900 capitalize">
-  //                   {currentView === 'proforma' ? 'Proforma Invoices' : currentView}
-  //                 </h1>
-  //               </div>
-
-  //               {/* Right Side: Keep only essential global actions if needed, otherwise empty */}
-  //               <div className="flex items-center gap-4">
-  //                  {/* Optional: User initials or a simplified cart indicator */}
-  //                  {currentView !== 'cart' && clientCarts.length > 0 && (
-  //                    <Button variant="outline" size="sm" onClick={() => setCurrentView('cart')} className="rounded-full">
-  //                       <ShoppingCart className="size-4 mr-2" />
-  //                       {clientCarts.length} Active
-  //                    </Button>
-  //                  )}
-  //               </div>
-  //             </div>
-  //           </div>
-  //         </header>
-
-
-  //     {/* Main Content */}
-  //     <main className="max-w-7xl mx-auto px-4 py-8">
-  //       {currentView === "scanner" && inventoryReady && (
-  //         <div>
-  //           {activeCart && (
-  //             <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-  //               <p className="text-sm text-blue-800">
-  //                 Adding items to <strong>{activeCart.clientName}</strong>'s cart
-  //                 {activeCart.items.length > 0 && 
-  //                   ` (${activeCart.items.reduce((sum, item) => sum + item.quantity, 0)} items)`
-  //                 }
-  //               </p>
-  //             </div>
-  //           )}
-  //           <Scanner products={products || []} onAddToCart={handleAddToCart} onProductSearch={handleProductSearch} searchResult={searchResult} />
-  //         </div>
-  //       )}
-  //       {currentView === "inventory" && <Inventory products={products as unknown as ExtendedProduct[]} onUpdateInventory={handleUpdateInventory} onBulkAdd={handleBulkAdd} />}
-  //       {currentView === "orders" && <Orders orders={orders} onFetchDetails={fetchOrderItems} onRecordPayment={handleRecordPayment} />}
-  //       {currentView === "cart" && (
-  //         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-  //           <CartManager
-  //             carts={clientCarts}
-  //             activeCartId={activeCartId}
-  //             onSelectCart={handleSelectCart}
-  //             onCreateCart={handleCreateCart}
-  //             onCloseCart={handleCloseCart}
-  //           />
-  //           <Cart
-  //             items={activeCart?.items || []}
-  //             products={products}
-  //             clientName={activeCart?.clientName || null}
-  //             discount={activeCart?.discount || 0}
-  //             activeCart={activeCart}
-  //             activeCartId={activeCartId}
-  //             onUpdateQuantity={handleUpdateQuantity}
-  //             onRemoveItem={handleRemoveItem}
-  //             onCheckout={handleCheckout}
-  //             onUpdateDiscount={handleUpdateDiscount}
-  //             updateCartTax={updateCartTax}
-  //             onGeneratePI={handleGeneratePI}
-  //             onSaveCart={handleSaveCart}
-  //             onUpdateAdvance={handleUpdateAdvance}
-  //             onUpdateAddress={(val) => handleUpdateCartMetadata('deliveryAddress', val)} //
-  //             onUpdatePhone={(val) => handleUpdateCartMetadata('clientPhone', val)}       //
-  //             onUpdateReferral={(val) => handleUpdateCartMetadata('referralSource', val)} //
-  //           />
-  //         </div>
-  //       )}
-  //       {currentView === "proforma" && (
-  //         <ProformaInvoices
-  //           products={products}
-  //           invoices={proformaOrders.map(o => ({
-  //             id: o.id,
-  //             piNumber: o.orderNumber,
-  //             clientName: o.customerName,
-  //             items: o.items || [],
-  //             discount: o.discount || 0,
-  //             status: o.status as any,
-  //             createdAt: o.date,
-  //             updatedAt: o.date,
-  //             subtotal: o.subtotal,
-  //             discount_amount: o.discount_amount,
-  //             discount_percent: o.discount_percent,
-  //             tax_percent: o.tax_percent,
-  //             tax_amount: o.tax_amount,
-  //             final_total: o.final_total,
-  //             paidAmount: o.paidAmount || 0,
-  //             total: o.total,
-  //             clientPhone: o.clientPhone,        
-  //             referralSource: o.referralSource, 
-  //             deliveryAddress: o.deliveryAddress
-  //           }))
-  //           }
-  //           onEditPI={handleEditPI}
-  //           onConvertToOrder={handleCheckout}
-  //           onDeletePI={handleCloseCart}
-  //           onUpdateStatus={handleUpdatePIStatus}
-  //           onFetchDetails={fetchOrderItems} // Pass the item fetcher here too!
-  //           initialDownloadId={autoDownloadPIId} // Add this prop
-  //           onClearInitialDownload={() => setAutoDownloadPIId(null)} // Add this prop
-  //         />
-  //       )}
-  //     </main>
-  //     </>
-  //     )}
-
-  //     {/* Client Selection Dialog */}
-  //     <Dialog open={showClientDialog} onOpenChange={setShowClientDialog}>
-  //       <DialogContent>
-  //         <DialogHeader>
-  //           <DialogTitle>Select or Create Client Cart</DialogTitle>
-  //         </DialogHeader>
-  //         <div className="py-4 space-y-4">
-  //           {clientCarts.length > 0 && (
-  //             <div>
-  //               <h4 className="text-sm font-medium mb-2">Existing Carts</h4>
-  //               <div className="space-y-2">
-  //                 {clientCarts.map((cart) => (
-  //                   <Button
-  //                     key={cart.id}
-  //                     variant="outline"
-  //                     className="w-full justify-start"
-  //                     onClick={() => handleSelectExistingCart(cart.id)}
-  //                   >
-  //                     <ShoppingCart className="size-4 mr-2" />
-  //                     {cart.clientName} ({cart.items.length} items)
-  //                   </Button>
-  //                 ))}
-  //               </div>
-  //               <div className="relative my-4">
-  //                 <div className="absolute inset-0 flex items-center">
-  //                   <div className="w-full border-t"></div>
-  //                 </div>
-  //                 <div className="relative flex justify-center text-xs uppercase">
-  //                   <span className="bg-white px-2 text-gray-500">Or</span>
-  //                 </div>
-  //               </div>
-  //             </div>
-  //           )}
-  //           <div className="space-y-3">
-  //             <h4 className="text-sm font-medium border-b pb-1">New Cart</h4>
-              
-  //             {/* Primary Field: Client Name */}
-  //             <div>
-  //               <Label className="text-[10px] uppercase font-bold text-gray-400">Client Name *</Label>
-  //               <Input
-  //                 type="text"
-  //                 placeholder="Enter client name..."
-  //                 value={newClientName}
-  //                 onChange={(e) => setNewClientName(e.target.value)}
-  //                 onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
-  //                 autoFocus
-  //                 className="mt-1"
-  //               />
-  //             </div>
-
-  //             {/* Secondary Row: Domain-Agnostic Optional Fields */}
-  //             <div className="grid grid-cols-2 gap-3">
-  //               <div>
-  //                 <Label className="text-[10px] uppercase font-bold text-gray-400">Phone</Label>
-  //                 <Input
-  //                   type="tel"
-  //                   placeholder="Contact number"
-  //                   value={clientPhone} // Ensure this state is defined
-  //                   onChange={(e) => setClientPhone(e.target.value)}
-  //                   onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
-  //                   className="mt-1 text-sm"
-  //                 />
-  //               </div>
-  //               <div>
-  //                 <Label className="text-[10px] uppercase font-bold text-gray-400">Referral / Partner</Label>
-  //                 <Input
-  //                   type="text"
-  //                   placeholder="Designer, Agent, etc."
-  //                   value={referralSource} // Use 'referralSource' for domain flexibility
-  //                   onChange={(e) => setReferralSource(e.target.value)}
-  //                   onKeyDown={(e) => e.key === "Enter" && handleCreateNewCartFromDialog()}
-  //                   className="mt-1 text-sm"
-  //                 />
-  //               </div>
-  //             </div>
-  //           </div>
-  //         </div>
-  //         <DialogFooter>
-  //           <Button
-  //             variant="outline"
-  //             onClick={() => {
-  //               setShowClientDialog(false);
-  //               setPendingProduct(null);
-  //             }}
-  //           >
-  //             Cancel
-  //           </Button>
-  //           <Button
-  //             onClick={handleCreateNewCartFromDialog}
-  //             disabled={!newClientName.trim()}
-  //           >
-  //             Create New Cart
-  //           </Button>
-  //         </DialogFooter>
-  //       </DialogContent>
-  //     </Dialog>
-  //   </div>
-  // );
-// --- END OF LOGIC SECTION ---
 
 return (
   <div className="min-h-screen bg-gray-50">
@@ -2227,8 +1983,10 @@ return (
                 }}
                 activeCartId={activeCartId}
                 activeCartLabel={activeCart?.clientName || null}
-                onRequireActiveCart={() => {
+                onRequireActiveCart={(continuation, items) => {
                   setPendingProduct(null);
+                  setPendingCartItems(items || null);
+                  setPendingContinuation(() => continuation); // This was mistakenly removed and is now restored.
                   setPendingQuantity(1);
                   setPendingAttribute("None");
                   setShowClientDialog(true);
@@ -2236,6 +1994,7 @@ return (
                 onLoadMore={handleLoadMoreInventory}
                 hasMoreProducts={inventoryPagination.hasMore}
                 onFiltersChange={handleInventoryFiltersChange}
+                onDeleteItem={handleDeleteItem}
                 totalProducts={inventoryPagination.total}
               />
             )}
@@ -2339,6 +2098,19 @@ return (
                 onFetchDetails={fetchOrderItems}
                 initialDownloadId={autoDownloadPIId}
                 onClearInitialDownload={() => setAutoDownloadPIId(null)}
+                onDownloadPIPDF={async (pi) => {
+                  try {
+                    setIsLoading(true);
+                    const pdf = await renderDocumentPdf(pi, "PI");
+                    pdf.save(`PI_${pi.piNumber}_${pi.clientName}.pdf`);
+                    toast.success("Proforma Invoice downloaded successfully");
+                  } catch (err) {
+                    console.error("Central PI generation failed:", err);
+                    toast.error("Failed to generate multi-page PDF");
+                  } finally {
+                    setIsLoading(false);
+                  }
+                }}
               />
             )}
           </main>
@@ -2505,6 +2277,8 @@ return (
               onClick={() => {
                 setShowClientDialog(false);
                 setPendingProduct(null);
+                setPendingCartItems(null);
+                setPendingContinuation(null);
               }}
             >
               Cancel

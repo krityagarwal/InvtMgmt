@@ -42,12 +42,13 @@ interface InventoryProps {
   onAddToCartFromInventory?: (product: ExtendedProduct, quantity: number, room: string) => Promise<void>;
   activeCartId?: string | null;
   activeCartLabel?: string | null;
-  onRequireActiveCart?: () => void;
+  onRequireActiveCart?: (callback?: () => void, items?: any[]) => void;
   onLoadMore?: () => Promise<void>;
   hasMoreProducts?: boolean;
   onSearchChange?: (searchTerm: string) => void;
   onFiltersChange?: (filters: InventoryFilterState) => void;
   totalProducts?: number;
+  onDeleteItem?: (productId: string) => Promise<void>;
 }
 
 interface CategoryOption {
@@ -90,6 +91,7 @@ export function Inventory({
   onSearchChange,
   onFiltersChange,
   totalProducts,
+  onDeleteItem,
 }: InventoryProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterCategory, setFilterCategory] = useState<string>("all");
@@ -100,6 +102,7 @@ export function Inventory({
     direction: "asc" | "desc";
   }>({ field: null, direction: "asc" });
   const [categoryOptions, setCategoryOptions] = useState<CategoryOption[]>([]);
+  const [selectedProductDetails, setSelectedProductDetails] = useState<Record<string, ExtendedProduct>>({});
   const [vendorNames, setVendorNames] = useState<string[]>([]);
   const categories = React.useMemo(
   () => ["all", ...new Set(products.map(p => p.category))],
@@ -255,6 +258,29 @@ React.useEffect(() => {
     return isExplicitlyChecked || (matchesSearch && matchesCategory && matchesVendor && matchesDisplay && matchesGodown);
   });
 
+  // This is the new, crucial piece. It represents only the products that match the current text/dropdown filters,
+  // ignoring any items that are only visible because they were previously selected.
+  const productsMatchingCurrentFilters = products.filter((product) => {
+    let matchesSearch = true;
+    if (!onSearchChange && !usesBackendFilters && searchTerm.trim() !== "") {
+      const results = fuse.search(searchTerm);
+      matchesSearch = results.some(r => r.item.id === product.id);
+    }
+    const matchesCategory = usesBackendFilters || filterCategory === "all" || product.category === filterCategory;
+    const matchesVendor = usesBackendFilters || filters.vendor === "all" || (product.vendor && product.vendor.trim().toUpperCase() === filters.vendor);
+    const displayVal = Number(filters.displayQty.value);
+    const matchesDisplay = usesBackendFilters || filters.displayQty.operator === "any" || filters.displayQty.value === "" ? true :
+      filters.displayQty.operator === "equals" ? product.displayStock === displayVal :
+      filters.displayQty.operator === "gt" ? product.displayStock > displayVal :
+      filters.displayQty.operator === "lt" ? product.displayStock < displayVal : true;
+    const godownVal = Number(filters.godownQty.value);
+    const matchesGodown = usesBackendFilters || filters.godownQty.operator === "any" || filters.godownQty.value === "" ? true :
+      filters.godownQty.operator === "equals" ? product.godownStock === godownVal :
+      filters.godownQty.operator === "gt" ? product.godownStock > godownVal :
+      filters.godownQty.operator === "lt" ? product.godownStock < godownVal : true;
+    return matchesSearch && matchesCategory && matchesVendor && matchesDisplay && matchesGodown;
+  });
+
   const sortedProducts = React.useMemo(() => {
     const sortField = priceSort.field;
     if (!sortField) return filteredProducts;
@@ -344,14 +370,19 @@ React.useEffect(() => {
   //   });
   // };
 
-  const toggleSelection = (productId: string) => {
+  const toggleSelection = (product: ExtendedProduct) => {
     setPrintSelection(prev => {
       const newSelection = { ...prev };
-      // Strict persistence check: if it exists, toggle it off; otherwise, track it
-      if (newSelection[productId]) {
-        delete newSelection[productId];
+      if (newSelection[product.id]) {
+        delete newSelection[product.id];
+        setSelectedProductDetails(prevDetails => {
+          const newDetails = { ...prevDetails };
+          delete newDetails[product.id];
+          return newDetails;
+        });
       } else {
-        newSelection[productId] = 1; // Tracks selection state across search mutations
+        newSelection[product.id] = 1; // Tracks selection state
+        setSelectedProductDetails(prevDetails => ({ ...prevDetails, [product.id]: product }));
       }
       return newSelection;
     });
@@ -365,7 +396,7 @@ const toggleAll = () => {
     sortedProducts.every(p => !!printSelection[p.id]);
 
   if (allFilteredSelected) {
-    // 2. If all are selected, clear the selection for THESE items
+    // 2. If all are selected, clear the selection for ONLY THESE visible items
     setPrintSelection(prev => {
       const newSelection = { ...prev };
       sortedProducts.forEach(p => {
@@ -374,7 +405,7 @@ const toggleAll = () => {
       return newSelection;
     });
   } else {
-    // 3. Otherwise, add all filtered products to the selection
+    // 3. Otherwise, add all currently visible filtered products to the selection
     setPrintSelection(prev => {
       const newSelection = { ...prev };
       sortedProducts.forEach(p => {
@@ -483,18 +514,28 @@ const handlePrintLabels = () => {
   };
 
   const selectedProductsForCart = React.useMemo(
-    () => sortedProducts.filter((p) => !!printSelection[p.id]),
-    [sortedProducts, printSelection]
+    () => Object.values(selectedProductDetails).filter(p => !!printSelection[p.id]),
+    [selectedProductDetails, printSelection]
   );
 
   const openAddToCartModal = () => {
+    const itemsForCart = selectedProductsForCart.map(p => {
+      const draft = cartDrafts[p.id] || { qty: 1, room: "None", customRoom: "" };
+      const resolvedRoom = draft.room === "Custom" ? (draft.customRoom || "").trim() : draft.room;
+      return {
+        product_id: p.id,
+        quantity: draft.qty,
+        attribute_metadata: [{ label: resolvedRoom, qty: draft.qty }]
+      };
+    });
+
     if (!activeCartId) {
-      onRequireActiveCart?.();
-      toast.info("Create or select a cart to continue.");
+      onRequireActiveCart?.(() => setIsAddToCartModalOpen(true), itemsForCart);
       return;
     }
+
     if (selectedProductsForCart.length === 0) {
-      toast.error("Select at least one item.");
+      toast.error("Select at least one item to add to the cart.");
       return;
     }
 
@@ -508,6 +549,7 @@ const handlePrintLabels = () => {
     });
     setCartDrafts(seed);
     setIsAddToCartModalOpen(true);
+    // This was the problem. It was being called immediately.
   };
 
   const updateCartDraft = (productId: string, patch: Partial<{ qty: number; room: string; customRoom?: string }>) => {
@@ -758,11 +800,7 @@ const handlePrintLabels = () => {
                   <TableHead className="w-[40px]">
                     <Checkbox 
                       // Show as checked only if all visible items are selected
-                      //checked={sortedProducts.length > 0 && sortedProducts.every(p => !!printSelection[p.id])}
-                      //onCheckedChange={toggleAll}
-
-                      // Checked state is bound dynamically to the current visible query array context
-                      checked={sortedProducts.length > 0 && sortedProducts.every(p => !!printSelection[p.id])}
+                      checked={productsMatchingCurrentFilters.length > 0 && productsMatchingCurrentFilters.every(p => !!printSelection[p.id])}
                       onCheckedChange={toggleAll}
                       className="translate-y-[2px]"
                     />
@@ -828,9 +866,8 @@ const handlePrintLabels = () => {
                       >
                         <TableCell>
                           <Checkbox 
-                            // Evaluates directly against the isolated printSelection memory cache
                             checked={Boolean(printSelection[product.id])} 
-                            onCheckedChange={() => toggleSelection(product.id)}
+                            onCheckedChange={() => toggleSelection(product)}
                             className="cursor-pointer"
                           />
                         </TableCell>
@@ -1165,17 +1202,32 @@ const handlePrintLabels = () => {
                               </Button>
                             </div>
                           ) : (
-                            <Button 
-                              size="icon" 
-                              variant="ghost" 
-                              className="size-8"
-                              onClick={() => {
-                                setEditingId(product.id);
-                                setEditBuffer({ ...product });
-                              }}
-                            >
-                              <Edit2 className="size-3.5 text-slate-400" />
-                            </Button>
+                            <div className="flex items-center justify-end gap-0">
+                              <Button 
+                                size="icon" 
+                                variant="ghost" 
+                                className="size-8"
+                                onClick={() => {
+                                  setEditingId(product.id);
+                                  setEditBuffer({ ...product });
+                                }}
+                              >
+                                <Edit2 className="size-3.5 text-slate-400" />
+                              </Button>
+                              <Button 
+                                size="icon" 
+                                variant="ghost" 
+                                className="size-8 hover:bg-red-50"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (window.confirm(`Are you sure you want to delete ${product.barcode}? This action cannot be undone.`)) {
+                                    await onDeleteItem?.(product.id);
+                                  }
+                                }}
+                              >
+                                <Trash2 className="size-3.5 text-red-500" />
+                              </Button>
+                            </div>
                           )}
                         </TableCell>
                       </TableRow>
