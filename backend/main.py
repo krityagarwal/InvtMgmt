@@ -7,8 +7,8 @@ from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from typing import Any, Optional, Dict, List
-import psycopg2  # <--- This is the missing line
-from psycopg2.extras import RealDictCursor, Json
+from psycopg.rows import dict_row
+from psycopg.types.json import Json
 import urllib.parse
 import mimetypes
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -70,6 +70,8 @@ def _sanitize_json(value):
         return {k: _sanitize_json(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_sanitize_json(v) for v in value]
+    if isinstance(value, uuid.UUID):
+        return str(value)
     return value
 
 def _compute_changes(before: Dict[str, Any], after: Dict[str, Any], fields: List[str], labels: Dict[str, str]):
@@ -168,7 +170,7 @@ async def get_inventory(
     conn = Depends(get_db)
 ):
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             search_term = search.strip() if search else ""
             filters = []
             params = [shop_id]
@@ -264,7 +266,7 @@ async def check_product_stock(product_ids: List[str] = Body(...), conn = Depends
         if not product_ids:
             return {}
         
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             # Create placeholders for the query and cast to UUID array
             placeholders = ','.join(['%s::uuid'] * len(product_ids))
             cur.execute(f"""
@@ -292,7 +294,7 @@ async def update_inventory_item(product_id: str, updates: Dict[str, Any] = Body(
         raise HTTPException(status_code=400, detail="No fields provided for update")
 
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute("SELECT * FROM products WHERE id = %s", (product_id,))
             before_row = cur.fetchone()
             if not before_row:
@@ -372,6 +374,50 @@ async def update_inventory_item(product_id: str, updates: Dict[str, Any] = Body(
         print(f"Update Error: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
+@app.delete("/inventory/{product_id}")
+async def delete_inventory_item(product_id: str, conn = Depends(get_db)):
+    try:
+        with conn.cursor() as cur:
+            # 1. Fetch the item's details BEFORE deleting for the audit log
+            cur.execute(
+                "SELECT id, shop_id, item_code, vendor_name, selling_price FROM products WHERE id = %s", 
+                (product_id,)
+            )
+            product_to_delete = cur.fetchone()
+
+            if not product_to_delete:
+                raise HTTPException(status_code=404, detail="Product not found")
+
+            # 2. Log the deletion event
+            log_audit_event(
+                cur,
+                shop_id=str(product_to_delete.get("shop_id")),
+                entity_type="inventory",
+                entity_id=str(product_id),
+                action="inventory_item_deleted",
+                before=dict(product_to_delete), # Log what was deleted
+                after=None,
+                notes=f"Deleted item: {product_to_delete.get('item_code')}"
+            )
+
+            # 3. Perform the deletion
+            cur.execute("DELETE FROM products WHERE id = %s", (product_id,))
+            
+            if cur.rowcount == 0:
+                # This case is unlikely if the fetch succeeded, but good for safety
+                raise HTTPException(status_code=404, detail="Product not found during delete operation")
+
+            conn.commit()
+            return {"status": "success", "message": "Product deleted"}
+    except psycopg.errors.ForeignKeyViolation as e:
+        # This is the specific error for trying to delete a referenced product.
+        # We return a 409 Conflict status, which is more appropriate than a 500.
+        logger.warning(f"Attempted to delete product {product_id} which is in use in an order.")
+        raise HTTPException(
+            status_code=409, 
+            detail="Cannot delete product. It is part of one or more existing orders."
+        )
+
 class BasketItem(BaseModel):
     order_id: str  # Changed from shop_id to order_id
     product_id: str
@@ -381,7 +427,7 @@ class BasketItem(BaseModel):
 @app.post("/basket/add")
 async def add_to_basket(item: BasketItem, conn = Depends(get_db)):
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             # 1. Get Product Price
             cur.execute("SELECT selling_price FROM products WHERE id = %s", (item.product_id,))
             res = cur.fetchone()
@@ -429,7 +475,7 @@ async def get_active_basket(shop_id: str, conn = Depends(get_db)):
         WHERE oi.order_id = %s
     """
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(query_order, (shop_id,))
             order = cur.fetchone()
             if not order: return {}
@@ -442,23 +488,21 @@ async def get_active_basket(shop_id: str, conn = Depends(get_db)):
     
 @app.get("/product/by-code")
 async def get_product_by_code(item_code: str, conn = Depends(get_db)):
-    with conn.cursor() as cur:
+    with conn.cursor(row_factory=dict_row) as cur:
         cur.execute("SELECT * FROM products WHERE item_code = %s", (item_code,))
         return cur.fetchone() 
             
 class BasketCreate(BaseModel):
     shop_id: str
     client_name: str
-    initial_product_id: str = None  # Added this field
     client_phone: Optional[str] = None
     referral_source: Optional[str] = None
     delivery_address: Optional[str] = None
-    qty: Optional[int] = 1
 
 @app.post("/basket/create")
 async def create_basket(req: BasketCreate, conn = Depends(get_db)):
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             client_id = None
             
             # 1. Identity Resolution: Check if client exists IN THIS SHOP
@@ -497,13 +541,6 @@ async def create_basket(req: BasketCreate, conn = Depends(get_db)):
                 req.delivery_address,
             ))
             new_order_id = cur.fetchone()['id']
-
-            # 4. Insert the first item if provided
-            if req.initial_product_id:
-                cur.execute("""
-                    INSERT INTO order_items (order_id, product_id, quantity, unit_price)
-                    VALUES (%s, %s, %s, (SELECT selling_price FROM products WHERE id = %s))
-                """, (new_order_id, req.initial_product_id, req.qty, req.initial_product_id))
 
             # 5. Finalize totals and commit
             update_order_total(cur, new_order_id)
@@ -628,6 +665,7 @@ class FinalizeOrderRequest(BaseModel):
     discount_percent: float
     tax_percent: float
     extra_discount_amount: float = 0.0
+    transportation_cost: float = 0.0
     paid_amount: float
     final_total_override: Optional[float] = None
     referral_source: str = ""
@@ -639,7 +677,7 @@ async def finalize_order(req: FinalizeOrderRequest, conn = Depends(get_db)): # N
     # Define queries
     query_items = "SELECT product_id, quantity FROM order_items WHERE order_id = %s"
     
-    with conn.cursor() as cur:
+    with conn.cursor(row_factory=dict_row) as cur:
             # A. Fetch items for stock deduction
             cur.execute(query_items, (req.order_id,))
             items = cur.fetchall()
@@ -668,6 +706,7 @@ async def finalize_order(req: FinalizeOrderRequest, conn = Depends(get_db)): # N
                     discount_percent = %s, 
                     tax_percent = %s, 
                     extra_discount_amount = %s,
+                    transportation_cost = %s,
                     paid_amount = %s,
                     referral_source = %s,
                     delivery_address = %s,
@@ -678,6 +717,7 @@ async def finalize_order(req: FinalizeOrderRequest, conn = Depends(get_db)): # N
                 req.discount_percent, 
                 req.tax_percent, 
                 req.extra_discount_amount,
+                req.transportation_cost,
                 req.paid_amount, 
                 req.referral_source, 
                 req.delivery_address, 
@@ -691,7 +731,7 @@ async def finalize_order(req: FinalizeOrderRequest, conn = Depends(get_db)): # N
 
             cur.execute(
                 """
-                SELECT shop_id, client_name, final_total, discount_percent, extra_discount_amount, paid_amount
+                SELECT shop_id, client_name, final_total, discount_percent, extra_discount_amount, transportation_cost, paid_amount
                 FROM orders
                 WHERE id = %s
                 """,
@@ -728,9 +768,16 @@ class PIRequest(BaseModel):
 @app.post("/order/convert-to-pi")
 async def convert_to_pi(req: PIRequest, conn = Depends(get_db)):
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             # 1. Calculate the subtotal from order_items
-            cur.execute("SELECT SUM(total_price) as subtotal FROM order_items WHERE order_id = %s", (req.order_id,))
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(COALESCE(total_price, quantity * unit_price)), 0) as subtotal
+                FROM order_items
+                WHERE order_id = %s
+                """,
+                (req.order_id,),
+            )
             subtotal = cur.fetchone()['subtotal'] or 0
             
             # 2. Apply discount
@@ -777,7 +824,7 @@ async def get_basket_details(order_id: str, conn = Depends(get_db)):
         WHERE oi.order_id = %s
     """
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query_items, (order_id,))
                 raw_items = cur.fetchall()
                 
@@ -803,9 +850,11 @@ async def get_basket_details(order_id: str, conn = Depends(get_db)):
 
                 cur.execute("""
                     SELECT 
-                        status, discount_percent, tax_percent,
+                        client_name,
+                        status, discount_percent, tax_percent, transportation_cost,
                         subtotal, discount_amount, extra_discount_amount, tax_amount, final_total,
-                        referral_source, delivery_address, client_phone, paid_amount, write_off_amount, write_off_notes
+                        referral_source, delivery_address, client_phone, paid_amount, 
+                        write_off_amount, write_off_notes
                     FROM orders 
                     WHERE id = %s
                 """, (order_id,))
@@ -816,10 +865,12 @@ async def get_basket_details(order_id: str, conn = Depends(get_db)):
 
                 return {
                     "order_items": formatted_items,
+                    "client_name": order_data["client_name"] or "",
                     "status": order_data['status'],
                     "discount_percent": order_data['discount_percent'] if order_data['discount_percent'] is not None else 0,
                     "discount_amount": float(order_data['discount_amount']) if order_data['discount_amount'] is not None else 0.0,
                     "extra_discount_amount": float(order_data['extra_discount_amount']) if order_data['extra_discount_amount'] is not None else 0.0,
+                    "transportation_cost": float(order_data['transportation_cost']) if order_data['transportation_cost'] is not None else 0.0,
                     "tax_percent": order_data['tax_percent'] if order_data['tax_percent'] is not None else 0,
                     "tax_amount": float(order_data['tax_amount']) if order_data['tax_amount'] is not None else 0.0,
                     "subtotal": float(order_data['subtotal']) if order_data['subtotal'] is not None else 0.0,
@@ -839,7 +890,7 @@ async def get_basket_details(order_id: str, conn = Depends(get_db)):
 async def list_orders(shop_id: str, status: str = None, conn = Depends(get_db)):
     query = """
         SELECT id, status, final_total, created_at, 
-               discount_percent, tax_percent, paid_amount,
+               discount_percent, tax_percent, paid_amount, transportation_cost,
                client_name, referral_source, delivery_address, client_phone,
                discount_amount, extra_discount_amount, tax_amount, write_off_amount, write_off_notes
         FROM orders 
@@ -854,7 +905,7 @@ async def list_orders(shop_id: str, status: str = None, conn = Depends(get_db)):
     query += " ORDER BY created_at DESC"
     
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, tuple(params))
                 return cur.fetchall()
     except Exception as e:
@@ -908,7 +959,7 @@ async def orders_summary(shop_id: str, conn = Depends(get_db)):
         CROSS JOIN profit_totals pt
     """
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, (shop_id,))
                 res = cur.fetchone() or {}
                 return {
@@ -1026,7 +1077,7 @@ async def stats_dashboard(shop_id: str, conn=Depends(get_db)):
                 COALESCE(c.name, 'Uncategorized') AS category,
                 COUNT(DISTINCT o.id) AS orders,
                 COALESCE(SUM(oi.quantity), 0) AS units_sold,
-                COALESCE(SUM(oi.total_price), 0) AS line_revenue
+                COALESCE(SUM(COALESCE(oi.total_price, oi.quantity * oi.unit_price)), 0) AS line_revenue
             FROM orders o
             JOIN order_items oi ON oi.order_id = o.id
             JOIN products p ON p.id = oi.product_id
@@ -1337,7 +1388,7 @@ async def get_audit_events(
     conn = Depends(get_db)
 ):
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 query = """
                     SELECT id, entity_type, entity_id, action, actor_id, actor_email, source, notes, before, after, created_at
                     FROM audit_events
@@ -1359,7 +1410,7 @@ async def get_audit_events(
 @app.post("/order/update-qty")
 async def update_order_item_qty(req: QtyUpdate, conn = Depends(get_db)):
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 # 1. Fetch current quantity first to validate the change
                 cur.execute(
                     "SELECT quantity FROM order_items WHERE order_id = %s AND product_id = %s",
@@ -1391,6 +1442,7 @@ async def update_order_item_qty(req: QtyUpdate, conn = Depends(get_db)):
                         (req.order_id, req.product_id)
                     )
                 else:
+                    unit_price = float(res["unit_price"] or 0)
                     cur.execute("""
                         UPDATE order_items 
                         SET quantity = %s
@@ -1434,7 +1486,7 @@ async def update_order_item_qty(req: QtyUpdate, conn = Depends(get_db)):
 @app.post("/order/update-item-metadata")
 async def update_order_item_metadata(req: ItemMetadataUpdate, conn = Depends(get_db)):
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     """
                     UPDATE order_items
@@ -1458,7 +1510,7 @@ async def update_order_item_metadata(req: ItemMetadataUpdate, conn = Depends(get
 @app.delete("/order/remove-item")
 async def remove_order_item(order_id: str, product_id: str, conn = Depends(get_db)):
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     """
                     SELECT o.shop_id, o.status, o.client_name, oi.quantity, p.item_code
@@ -1509,16 +1561,24 @@ async def remove_order_item(order_id: str, product_id: str, conn = Depends(get_d
 def update_order_total(cur, order_id, final_total_override: Optional[float] = None):
     """Recalculates and persists the subtotal, discount, tax, and final total."""
     # 1. Calculate the raw subtotal from items
-    cur.execute("SELECT SUM(total_price) as subtotal FROM order_items WHERE order_id = %s", (order_id,))
+    cur.execute(
+        """
+        SELECT COALESCE(SUM(COALESCE(total_price, quantity * unit_price)), 0) as subtotal
+        FROM order_items
+        WHERE order_id = %s
+        """,
+        (order_id,),
+    )
     res = cur.fetchone()
     subtotal = float(res['subtotal']) if res and res['subtotal'] else 0.0
     
-    # 2. Fetch both discount and tax percentages for the order
-    cur.execute("SELECT discount_percent, tax_percent, extra_discount_amount FROM orders WHERE id = %s", (order_id,))
+    # 2. Fetch discount, tax, and transportation cost for the order (MODIFIED)
+    cur.execute("SELECT discount_percent, tax_percent, extra_discount_amount, transportation_cost FROM orders WHERE id = %s", (order_id,))
     order_res = cur.fetchone()
     
     discount_percent = float(order_res['discount_percent']) if order_res else 0.0
     tax_percent = float(order_res['tax_percent']) if order_res else 0.0
+    transportation_cost = float(order_res['transportation_cost']) if order_res and order_res['transportation_cost'] is not None else 0.0
     existing_extra_discount = float(order_res['extra_discount_amount']) if order_res and order_res['extra_discount_amount'] is not None else 0.0
 
     subtotal_int = max(0, int(round(subtotal)))
@@ -1535,7 +1595,7 @@ def update_order_total(cur, order_id, final_total_override: Optional[float] = No
         for extra_discount in range(0, max_extra_discount + 1):
             taxable_int = subtotal_int - base_discount_int - extra_discount
             tax_int = int(math.ceil(taxable_int * (tax_percent / 100.0)))
-            computed_final = taxable_int + tax_int
+            computed_final = taxable_int + tax_int + int(round(transportation_cost))
             diff = abs(computed_final - target_final)
 
             if diff < min_diff or (diff == min_diff and extra_discount > best_extra_discount):
@@ -1548,13 +1608,13 @@ def update_order_total(cur, order_id, final_total_override: Optional[float] = No
         final_extra_discount_amount = float(best_extra_discount)
         taxable_amount = float(max(0, subtotal_int - base_discount_int - best_extra_discount))
         tax_amount = float(int(math.ceil(taxable_amount * (tax_percent / 100.0))))
-        final_total = taxable_amount + tax_amount
+        final_total = taxable_amount + tax_amount + transportation_cost
     else:
         discount_amount = base_discount_amount
         taxable_amount = max(0.0, subtotal - discount_amount - final_extra_discount_amount)
         raw_tax = taxable_amount * (tax_percent / 100.0)
         tax_amount = float(math.ceil(raw_tax))
-        final_total = taxable_amount + tax_amount
+        final_total = taxable_amount + tax_amount + transportation_cost
     
     # 4. Persist all values to the orders table
     cur.execute("""
@@ -1576,7 +1636,7 @@ async def delete_order(order_id: str, conn = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid order_id format.")
     try:
         print(f"[delete_order] start order_id={order_id}")
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 # 1. Verify status is deletable before allowing delete
                 cur.execute("SELECT status, shop_id, client_name FROM orders WHERE id = %s", (order_id,))
                 res = cur.fetchone()
@@ -1614,7 +1674,7 @@ async def delete_order(order_id: str, conn = Depends(get_db)):
                 
                 conn.commit()
                 print(f"[delete_order] success order_id={order_id}")
-                return {"status": "success"}
+                return {"status": "success", "order_id": str(order_id)}
     except HTTPException as e:
         # Preserve intended HTTP error codes (e.g., 400 for non-bucket deletes)
         raise e
@@ -1640,7 +1700,7 @@ class ProductAdd(BaseModel):
 @app.get("/categories")
 async def get_categories(conn = Depends(get_db)):
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute("SELECT id,name FROM categories ORDER BY name ASC")
             return cur.fetchall()
     except Exception as e:
@@ -1649,7 +1709,7 @@ async def get_categories(conn = Depends(get_db)):
 @app.get("/vendors")
 async def get_vendors(conn = Depends(get_db)):
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute("""
                 SELECT DISTINCT vendor_name
                 FROM products
@@ -1665,7 +1725,7 @@ async def get_vendors(conn = Depends(get_db)):
 @app.post("/inventory/add")
 async def add_inventory(req: ProductAdd, conn = Depends(get_db)):
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute("""
                     INSERT INTO products (
                         item_code, category, vendor_name, display_qty, godown_qty, 
@@ -1699,7 +1759,7 @@ class BulkProductAdd(BaseModel):
 @app.post("/inventory/bulk-add")
 async def bulk_add_inventory(items: List[BulkProductAdd], conn = Depends(get_db)):
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 query = """
                     INSERT INTO products (
                         shop_id, category_id, item_code, photo_url, 
@@ -1740,93 +1800,87 @@ class StatusUpdateRequest(BaseModel):
     referral_source: str = ""   
     delivery_address: str = "" 
     client_phone: str = ""     
+    transportation_cost: Optional[float] = 0.0
 
 @app.post("/order/update-status")
-async def update_order_status(request: StatusUpdateRequest):
-    # Establish connection to your PostgreSQL database
-    conn = get_db_conn()
-    cur = conn.cursor()
-    
+async def update_order_status(request: StatusUpdateRequest, conn=Depends(get_db)):
     try:
-        cur.execute("SELECT shop_id, status, discount_percent, extra_discount_amount, paid_amount, client_name FROM orders WHERE id = %s", (request.order_id,))
-        before_order = cur.fetchone()
-        if not before_order:
-            raise HTTPException(status_code=404, detail="Order not found")
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT shop_id, status, discount_percent, extra_discount_amount, paid_amount, client_name FROM orders WHERE id = %s", (request.order_id,))
+            before_order = cur.fetchone()
+            if not before_order:
+                raise HTTPException(status_code=404, detail="Order not found")
 
-        # 2. Update the order status and discount in the database
-        cur.execute("""
-            UPDATE orders 
-            SET status = %s, 
-                discount_percent = %s,
-                tax_percent = %s,
-                extra_discount_amount = COALESCE(%s, extra_discount_amount),
-                paid_amount = %s,
-                referral_source = %s,
-                delivery_address = %s,
-                client_phone = %s,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = %s
-        """, (request.status, request.discount_percent, request.tax_percent, request.extra_discount_amount, request.paid_amount, request.referral_source, request.delivery_address, request.client_phone, request.order_id))
+            # 2. Update the order status and discount in the database
+            cur.execute("""
+                UPDATE orders 
+                SET status = %s, 
+                    discount_percent = %s,
+                    tax_percent = %s,
+                    extra_discount_amount = COALESCE(%s, extra_discount_amount),
+                    paid_amount = %s,
+                    referral_source = %s,
+                    delivery_address = %s,
+                    client_phone = %s,
+                transportation_cost = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+            """, (request.status, request.discount_percent, request.tax_percent, request.extra_discount_amount, request.paid_amount, request.referral_source, request.delivery_address, request.client_phone, request.transportation_cost, request.order_id))
 
-        update_order_total(cur, request.order_id, request.final_total_override)
-        
-        if cur.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Order not found")
-
-        cur.execute("SELECT status, discount_percent, extra_discount_amount, final_total, paid_amount FROM orders WHERE id = %s", (request.order_id,))
-        after_order = cur.fetchone()
-
-        changes = _compute_changes(
-            dict(before_order),
-            dict(after_order) if after_order else {},
-            fields=["status", "discount_percent", "extra_discount_amount", "paid_amount"],
-            labels={
-                "status": "Status",
-                "discount_percent": "Discount %",
-                "extra_discount_amount": "Extra Discount",
-                "paid_amount": "Advance Paid",
-            },
-        )
-
-        if request.status == "pi" and before_order.get("status") != "pi":
-            log_audit_event(
-                cur,
-                shop_id=str(before_order.get("shop_id")),
-                entity_type="order",
-                entity_id=str(request.order_id),
-                action="pi_created",
-                before=dict(before_order),
-                after={
-                    "order_number": str(request.order_id)[:8].upper(),
-                    "client_name": before_order.get("client_name"),
-                    "changes": changes,
-                },
-            )
-        elif before_order.get("status") == "pi":
-            log_audit_event(
-                cur,
-                shop_id=str(before_order.get("shop_id")),
-                entity_type="order",
-                entity_id=str(request.order_id),
-                action="pi_edited",
-                before=dict(before_order),
-                after={
-                    "order_number": str(request.order_id)[:8].upper(),
-                    "client_name": before_order.get("client_name"),
-                    "changes": changes,
-                },
-            )
+            update_order_total(cur, request.order_id, request.final_total_override)
             
-        conn.commit()
-        return {"message": f"Order status updated to {request.status}", "order_id": request.order_id}
-        
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Order not found")
+
+            cur.execute("SELECT status, discount_percent, extra_discount_amount, final_total, paid_amount FROM orders WHERE id = %s", (request.order_id,))
+            after_order = cur.fetchone()
+
+            changes = _compute_changes(
+                dict(before_order),
+                dict(after_order) if after_order else {},
+                fields=["status", "discount_percent", "extra_discount_amount", "paid_amount"],
+                labels={
+                    "status": "Status",
+                    "discount_percent": "Discount %",
+                    "extra_discount_amount": "Extra Discount",
+                    "paid_amount": "Advance Paid",
+                },
+            )
+
+            if request.status == "pi" and before_order.get("status") != "pi":
+                log_audit_event(
+                    cur,
+                    shop_id=str(before_order.get("shop_id")),
+                    entity_type="order",
+                    entity_id=str(request.order_id),
+                    action="pi_created",
+                    before=dict(before_order),
+                    after={
+                        "order_number": str(request.order_id)[:8].upper(),
+                        "client_name": before_order.get("client_name"),
+                        "changes": changes,
+                    },
+                )
+            elif before_order.get("status") == "pi":
+                log_audit_event(
+                    cur,
+                    shop_id=str(before_order.get("shop_id")),
+                    entity_type="order",
+                    entity_id=str(request.order_id),
+                    action="pi_edited",
+                    before=dict(before_order),
+                    after={
+                        "order_number": str(request.order_id)[:8].upper(),
+                        "client_name": before_order.get("client_name"),
+                        "changes": changes,
+                    },
+                )
+                
+            conn.commit()
+            return {"message": f"Order status updated to {request.status}", "order_id": str(request.order_id)}
     except Exception as e:
         logger.info(f"Error updating order status: {e}")
-        conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        cur.close()
-        conn.close()
 
 @app.post("/order/record-payment")
 async def record_payment(data: dict, conn = Depends(get_db)):
@@ -1836,7 +1890,7 @@ async def record_payment(data: dict, conn = Depends(get_db)):
     notes = data.get("notes", "")
 
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute("SELECT shop_id, paid_amount FROM orders WHERE id = %s", (order_id,))
                 order_row = cur.fetchone()
                 if not order_row:
@@ -1882,7 +1936,7 @@ async def write_off_balance(req: WriteOffRequest, conn = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Write-off amount must be greater than 0")
 
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     """
                     SELECT shop_id, final_total, paid_amount, write_off_amount
@@ -1943,10 +1997,318 @@ async def write_off_balance(req: WriteOffRequest, conn = Depends(get_db)):
         logger.error(f"Write-off error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/order/revert-to-draft/{order_id}")
+async def revert_order_to_draft(order_id: str, conn=Depends(get_db)):
+    """
+    Reverts a 'sold' order back to a 'bucket' state for editing.
+    This is a transactional operation that also restocks the associated items.
+    """
+    try:
+        with conn.cursor(row_factory=dict_row) as cur:
+            # 1. Verify the order exists and is 'sold'
+            cur.execute("SELECT * FROM orders WHERE id = %s FOR UPDATE", (order_id,))
+            order = cur.fetchone()
+
+            if not order:
+                raise HTTPException(status_code=404, detail="Order not found.")
+            if order['status'] != 'sold':
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Only 'sold' orders can be edited. Current status: {order['status']}."
+                )
+
+            # 1b. Capture the pre-edit state so cancel can fully restore it.
+            cur.execute(
+                """
+                SELECT
+                    oi.product_id,
+                    oi.quantity,
+                    oi.unit_price,
+                    oi.attribute_metadata,
+                    p.item_code
+                FROM order_items oi
+                JOIN products p ON p.id = oi.product_id
+                WHERE oi.order_id = %s
+                ORDER BY oi.created_at ASC
+                """,
+                (order_id,),
+            )
+            original_items = cur.fetchall()
+
+            snapshot = {
+                "order": _sanitize_json(dict(order)),
+                "items": _sanitize_json(original_items),
+            }
+
+            cur.execute(
+                """
+                INSERT INTO order_history (order_id, snapshot)
+                VALUES (%s, %s)
+                """,
+                (order_id, Json(snapshot)),
+            )
+
+            # 2. Get all items and revert stock quantities
+            cur.execute("SELECT product_id, quantity FROM order_items WHERE order_id = %s", (order_id,))
+            items_to_restock = cur.fetchall()
+
+            for item in items_to_restock:
+                cur.execute(
+                    "UPDATE products SET qty_godown = qty_godown + %s WHERE id = %s",
+                    (item['quantity'], item['product_id'])
+                )
+
+            # 3. Update the order status back to 'bucket'
+            cur.execute("UPDATE orders SET status = 'bucket' WHERE id = %s", (order_id,))
+
+            # 4. Log the audit event for this action
+            log_audit_event(
+                cur,
+                shop_id=str(order.get("shop_id")),
+                entity_type="order",
+                entity_id=str(order_id),
+                action="order_reverted_for_edit",
+                notes=f"Order {str(order_id)[:8]} reverted to draft for editing by user."
+            )
+            conn.commit()
+            return {"message": "Order reverted to draft successfully. Items have been restocked."}
+    except Exception as e:
+        logger.error(f"Error reverting order: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/order/cancel-edit/{order_id}")
+async def cancel_order_edit(order_id: str, conn=Depends(get_db)):
+    """
+    Cancels an edit session by restoring a bucket order back to sold
+    using the persisted order items that were in place before editing began.
+    """
+    try:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT status, shop_id, client_name FROM orders WHERE id = %s FOR UPDATE", (order_id,))
+            order = cur.fetchone()
+
+            if not order:
+                raise HTTPException(status_code=404, detail="Order not found.")
+            if order["status"] != "bucket":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Only draft orders can be cancelled from edit. Current status: {order['status']}."
+                )
+
+            cur.execute(
+                """
+                SELECT snapshot
+                FROM order_history
+                WHERE order_id = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (order_id,),
+            )
+            history_row = cur.fetchone()
+            if not history_row or not history_row.get("snapshot"):
+                raise HTTPException(
+                    status_code=404,
+                    detail="No edit snapshot found for this order."
+                )
+
+            snapshot = history_row["snapshot"]
+            original_order = snapshot.get("order") or {}
+            original_items = snapshot.get("items") or []
+
+            # Remove the edited draft items and restore the original sold items.
+            cur.execute("DELETE FROM order_items WHERE order_id = %s", (order_id,))
+
+            if original_items:
+                restored_values = [
+                    (
+                        order_id,
+                        item["product_id"],
+                        item["quantity"],
+                        item["unit_price"],
+                        json.dumps(item.get("attribute_metadata") or []),
+                    )
+                    for item in original_items
+                ]
+                cur.executemany(
+                    """
+                    INSERT INTO order_items (order_id, product_id, quantity, unit_price, attribute_metadata)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    restored_values,
+                )
+
+            # Restore stock based on the original sold order snapshot.
+            for item in original_items:
+                cur.execute(
+                    "SELECT qty_godown, qty_display FROM products WHERE id = %s",
+                    (item["product_id"],),
+                )
+                stock = cur.fetchone()
+                if not stock:
+                    continue
+
+                qty_needed = int(item["quantity"] or 0)
+                if stock["qty_godown"] >= qty_needed:
+                    cur.execute(
+                        "UPDATE products SET qty_godown = qty_godown - %s WHERE id = %s",
+                        (qty_needed, item["product_id"]),
+                    )
+                else:
+                    remainder = qty_needed - int(stock["qty_godown"] or 0)
+                    cur.execute(
+                        "UPDATE products SET qty_godown = 0, qty_display = qty_display - %s WHERE id = %s",
+                        (remainder, item["product_id"]),
+                    )
+
+            restored_status = original_order.get("status") or "sold"
+            cur.execute(
+                """
+                UPDATE orders
+                SET status = %s,
+                    discount_percent = %s,
+                    extra_discount_amount = %s,
+                    transportation_cost = %s,
+                    paid_amount = %s,
+                    client_name = %s,
+                    client_phone = %s,
+                    delivery_address = %s,
+                    referral_source = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (
+                    restored_status,
+                    original_order.get("discount_percent") or 0,
+                    original_order.get("extra_discount_amount") or 0,
+                    original_order.get("transportation_cost") or 0,
+                    original_order.get("paid_amount") or 0,
+                    original_order.get("client_name") or "",
+                    original_order.get("client_phone") or "",
+                    original_order.get("delivery_address") or "",
+                    original_order.get("referral_source") or "",
+                    order_id,
+                ),
+            )
+
+            update_order_total(cur, order_id)
+
+            log_audit_event(
+                cur,
+                shop_id=str(order.get("shop_id")),
+                entity_type="order",
+                entity_id=str(order_id),
+                action="order_edit_cancelled",
+                notes=f"Order {str(order_id)[:8]} edit cancelled; original sold order restored.",
+            )
+
+            update_order_total(cur, order_id)
+            conn.commit()
+            return {"message": "Edit cancelled. Order restored to sold state."}
+    except Exception as e:
+        logger.error(f"Error cancelling order edit: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class FinalizeEditItem(BaseModel):
+    product_id: str
+    quantity: int
+    unit_price: float
+    attribute_metadata: Optional[List[Dict[str, Any]]] = []
+
+class FinalizeEditRequest(BaseModel):
+    order_id: str
+    items: List[FinalizeEditItem]
+    discount_percent: float
+    extra_discount_amount: float
+    transportation_cost: float
+    paid_amount: float
+    client_name: str
+    client_phone: Optional[str] = None
+    delivery_address: Optional[str] = None
+    referral_source: Optional[str] = None
+
+@app.post("/order/finalize-edit")
+async def finalize_order_edit(req: FinalizeEditRequest, conn=Depends(get_db)):
+    """
+    Finalizes an edited order. This is a transactional operation that
+    replaces old items with new ones, recalculates totals, and deducts stock.
+    """
+    try:
+        with conn.cursor(row_factory=dict_row) as cur:
+            # 1. Fetch original order state for auditing
+            cur.execute("SELECT * FROM orders WHERE id = %s FOR UPDATE", (req.order_id,))
+            before_order = cur.fetchone()
+            if not before_order:
+                raise HTTPException(status_code=404, detail="Order not found.")
+
+            # 2. Wipe old order items
+            cur.execute("DELETE FROM order_items WHERE order_id = %s", (req.order_id,))
+
+            # 3. Insert new order items
+            if req.items:
+                item_values = [
+                    (
+                        req.order_id,
+                        item.product_id,
+                        item.quantity,
+                        item.unit_price,
+                        json.dumps(item.attribute_metadata or [])
+                    ) for item in req.items
+                ]
+                cur.executemany("""
+                    INSERT INTO order_items (order_id, product_id, quantity, unit_price, attribute_metadata)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, item_values)
+
+            # 4. Deduct final stock (revert-to-draft already restocked everything)
+            for item in req.items:
+                cur.execute("SELECT qty_godown FROM products WHERE id = %s", (item.product_id,))
+                stock = cur.fetchone()
+                if not stock: continue
+
+                qty_needed = item.quantity
+                if stock['qty_godown'] >= qty_needed:
+                    cur.execute("UPDATE products SET qty_godown = qty_godown - %s WHERE id = %s", (qty_needed, item.product_id))
+                else:
+                    remainder = qty_needed - stock['qty_godown']
+                    cur.execute("UPDATE products SET qty_godown = 0, qty_display = qty_display - %s WHERE id = %s", (remainder, item.product_id))
+
+            # 5. Update the order with new financial details and set status back to 'sold'
+            cur.execute("""
+                UPDATE orders
+                SET status = 'sold',
+                    discount_percent = %s,
+                    extra_discount_amount = %s,
+                    transportation_cost = %s,
+                    paid_amount = %s,
+                    client_name = %s,
+                    client_phone = %s,
+                    delivery_address = %s,
+                    referral_source = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+            """, (
+                req.discount_percent, req.extra_discount_amount, req.transportation_cost,
+                req.paid_amount, req.client_name, req.client_phone,
+                req.delivery_address, req.referral_source, req.order_id
+            ))
+
+            # 6. Recalculate all totals based on the new items and discounts
+            update_order_total(cur, req.order_id)
+
+            # 7. Log the edit event
+            log_audit_event(cur, shop_id=str(before_order['shop_id']), entity_type="order", entity_id=req.order_id, action="order_edited", notes="Order finalized after edit.")
+
+            conn.commit()
+            return {"status": "success", "message": "Order updated successfully."}
+    except Exception as e:
+        logger.error(f"Error finalizing order edit: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/order/write-offs/{order_id}")
 async def get_order_write_offs(order_id: str, conn = Depends(get_db)):
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     """
                     SELECT id, amount, reason, notes, created_at
@@ -1978,10 +2340,85 @@ async def get_order_write_offs(order_id: str, conn = Depends(get_db)):
         logger.error(f"Error fetching write-offs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/order/cancel/{order_id}")
+async def cancel_and_revert_order(order_id: str):
+    try:
+        uuid.UUID(order_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid order_id format.")
+
+    conn = None
+    try:
+        conn = get_db_conn()
+        with conn:  # Atomic transaction handles everything safely
+            with conn.cursor(row_factory=dict_row) as cur:
+                
+                # 1. Verify current status
+                cur.execute("SELECT status, shop_id, client_name, paid_amount FROM orders WHERE id = %s", (order_id,))
+                order = cur.fetchone()
+                
+                if not order:
+                    raise HTTPException(status_code=404, detail="Order not found.")
+                if order['status'] == "cancelled":
+                    raise HTTPException(status_code=400, detail="Order is already cancelled.")
+
+                # 2. Revert Inventory: Put quantities back into Godown
+                cur.execute("SELECT product_id, quantity FROM order_items WHERE order_id = %s", (order_id,))
+                items = cur.fetchall()
+                for item in items:
+                    cur.execute("""
+                        UPDATE products 
+                        SET qty_godown = qty_godown + %s 
+                        WHERE id = %s
+                    """, (item['quantity'], item['product_id']))
+
+                # 3. Handle Payments: Record a refund entry if money was captured
+                current_paid = float(order.get("paid_amount") or 0)
+                if current_paid > 0:
+                    cur.execute("""
+                        INSERT INTO payments (order_id, amount, payment_method, notes, transaction_date)
+                        VALUES (%s, %s, 'Refund', 'Automated refund due to order cancellation', CURRENT_TIMESTAMP)
+                    """, (order_id, -current_paid)) # Negative amount balances the ledger
+
+                # 4. Update the Master Order row cleanly
+                cur.execute("""
+                    UPDATE orders 
+                    SET status = 'cancelled',
+                        subtotal = 0,
+                        discount_amount = 0,
+                        extra_discount_amount = 0,
+                        tax_amount = 0,
+                        final_total = 0,
+                        paid_amount = 0, -- Set cached value to 0 since it is now refunded
+                        updated_at = NOW() 
+                    WHERE id = %s
+                """, (order_id,))
+
+                # 5. Maintain Audit Trails
+                log_audit_event(
+                    cur,
+                    shop_id=str(order.get("shop_id")),
+                    entity_type="order",
+                    entity_id=str(order_id),
+                    action="order_status_cancelled",
+                    before={"status": order.get("status"), "client_name": order.get("client_name")},
+                    after={"status": "cancelled"},
+                    notes=f"Order cancelled. Restocked {len(items)} items. Refunded ₹{current_paid}."
+                )
+
+                return {"status": "success", "message": "Order flagged as cancelled. Financials cleared and stock returned."}
+
+    except Exception as e:
+        logger.error(f"Cancellation routine failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
 @app.get("/order/payments/{order_id}")
 async def get_order_payments(order_id: str, conn = Depends(get_db)):
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     """
                     SELECT id, amount, payment_method, notes, transaction_date

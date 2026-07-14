@@ -395,8 +395,10 @@ interface CartProps {
   clientName: string | null;
   discount: number;
   extraDiscount?: number;
+  transportationCost?: number;
   activeCart: any;
   activeCartId: string | null;
+  isEditingOrder: boolean;
   onUpdateQuantity: (id: string, quantity: number) => void;
   onRemoveItem: (id: string) => void;
   onUpdateDiscount: (discount: number) => void;
@@ -409,13 +411,17 @@ interface CartProps {
   onUpdatePhone: (phone: string) => void;
   onUpdateReferral: (referral: string) => void;
   onUpdateItemRoom: (id: string, metadata: { label: string; qty: number }[]) => Promise<void> | void;
+  onUpdateTransportationCost: (amount: number) => void;
+  onUpdateFinalSale: () => void;
+  onCancelEdit: () => void;
 }
 
 export function Cart({
-  items, products, clientName, discount, extraDiscount = 0, activeCart, activeCartId,
-  onUpdateQuantity, onRemoveItem, onUpdateDiscount, onUpdateExtraDiscount, onCheckout,
+  items, products, clientName, discount, extraDiscount = 0, transportationCost = 0, activeCart, activeCartId,
+  isEditingOrder, onUpdateQuantity, onRemoveItem, onUpdateDiscount, onUpdateExtraDiscount, onCheckout,
   onGeneratePI, onSaveCart, onUpdateAdvance,
-  onUpdateAddress, onUpdatePhone, onUpdateReferral, onUpdateItemRoom,
+  onUpdateAddress, onUpdatePhone, onUpdateReferral, onUpdateItemRoom, onUpdateTransportationCost,
+  onUpdateFinalSale, onCancelEdit
 }: CartProps) {
   const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const [isFullPaid, setIsFullPaid] = useState(false);
@@ -432,10 +438,11 @@ export function Cart({
   const maxExtraDiscount = Math.max(0, Math.floor(subtotal) - baseDiscountAmount);
   const effectiveExtraDiscount = Math.min(numericExtraDiscount, maxExtraDiscount);
   const discountAmount = baseDiscountAmount + effectiveExtraDiscount;
-  const taxableAmount = Math.max(0, subtotal - discountAmount);
-  const negotiatedTotal = taxableAmount;
-  const finalizedAmount = negotiatedTotal;
-  const displayTotal = negotiatedTotal;
+  const taxableAmount = Math.max(0, subtotal - discountAmount); // This is pre-shipping
+  const numericTransportationCost = Math.max(0, Math.floor(Number(transportationCost) || 0));
+  const negotiatedTotal = taxableAmount + numericTransportationCost; // Total before any tax
+  const finalizedAmount = negotiatedTotal; // Assuming no tax for now
+  const displayTotal = negotiatedTotal; // Final amount to display
 
   useEffect(() => {
     if (!activeCartId) return;
@@ -691,7 +698,6 @@ export function Cart({
                   ₹{(item.price * item.quantity).toLocaleString()}
                 </div>
               </div>
-
               <div className="mt-1.5 flex items-center justify-between gap-2">
                 <div className="min-w-0">
                   {editingRoomItemId === item.id ? (
@@ -899,6 +905,22 @@ export function Cart({
           <span className="font-bold text-slate-600 font-mono text-[11px]">₹{effectiveExtraDiscount.toLocaleString()}</span>
         </div>
 
+        {/* NEW: Transportation Cost Input */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Transport Cost</span>
+            <span className="text-[11px] font-bold text-slate-400">₹</span>
+            <input
+              type="number"
+              value={transportationCost}
+              onChange={(e) => onUpdateTransportationCost(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+              onFocus={(e) => e.currentTarget.select()}
+              className="w-16 h-6 text-[11px] text-center font-bold border border-slate-200 rounded bg-white outline-none focus:border-blue-400 transition-colors"
+            />
+          </div>
+          <span className="font-bold text-slate-600 font-mono text-[11px]">₹{numericTransportationCost.toLocaleString()}</span>
+        </div>
+
         <div className="pt-2 border-t-2 border-dashed flex justify-between items-center">
           <span className="text-xs font-black uppercase text-gray-400">Total</span>
           <span className="text-xl font-black text-blue-700 font-mono tracking-tighter">₹{displayTotal.toLocaleString()}</span>
@@ -930,8 +952,8 @@ export function Cart({
           </div>
           <Input
             type="number" value={activeCart?.advancePaid || ""}
-            className={`w-24 h-7 text-right font-black text-xs border-blue-200 ${isFullPaid ? "bg-slate-100 text-slate-500" : "bg-white"}`}
-            disabled={isFullPaid}
+            className={`w-24 h-7 text-right font-black text-xs border-blue-200 ${isFullPaid || isEditingOrder ? "bg-slate-100 text-slate-500" : "bg-white"}`}
+            disabled={isFullPaid || isEditingOrder}
             onFocus={(e) => e.currentTarget.select()}
             onChange={(e) => onUpdateAdvance(parseFloat(e.target.value) || 0)}
           />
@@ -939,18 +961,28 @@ export function Cart({
 
         {/* 5. ACTION BUTTONS */}
         <div className="grid grid-cols-3 gap-2 pt-1">
-          <Button variant="outline" size="sm" className="h-9 font-bold text-[10px] uppercase text-blue-600 border-blue-100" onClick={onSaveCart}>
-             Save
-          </Button>
-          <Button variant="outline" size="sm" className="h-9 font-bold text-[10px] uppercase text-gray-600" onClick={onGeneratePI}>
-             PI
-          </Button>
-          <Button 
-            size="sm" className={`h-9 font-bold text-[10px] uppercase ${hasOverstockItems ? 'bg-gray-300' : 'bg-blue-700'}`}
-            onClick={onCheckout} disabled={hasOverstockItems}
-          >
-             {hasOverstockItems ? 'Shortage' : 'Sell'}
-          </Button>
+          {isEditingOrder ? (
+            <>
+              <Button variant="outline" size="sm" className="h-9 font-bold text-[10px] uppercase col-span-1" onClick={() => {
+                if (window.confirm("Are you sure you want to cancel editing? The order will be restored to its original sold state.")) {
+                  onCancelEdit();
+                }
+              }}>
+                Cancel Edit
+              </Button>
+              <Button size="sm" className="h-9 font-bold text-[10px] uppercase bg-green-600 hover:bg-green-700 col-span-2" onClick={onUpdateFinalSale}>
+                Finalize Edit
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" size="sm" className="h-9 font-bold text-[10px] uppercase text-blue-600 border-blue-100" onClick={onSaveCart}>Save</Button>
+              <Button variant="outline" size="sm" className="h-9 font-bold text-[10px] uppercase text-gray-600" onClick={onGeneratePI}>PI</Button>
+              <Button size="sm" className={`h-9 font-bold text-[10px] uppercase ${hasOverstockItems ? 'bg-gray-300' : 'bg-blue-700'}`} onClick={onCheckout} disabled={hasOverstockItems}>
+                {hasOverstockItems ? 'Shortage' : 'Sell'}
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </div>

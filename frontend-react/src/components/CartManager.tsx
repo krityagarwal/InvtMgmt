@@ -22,9 +22,11 @@ export interface ClientCart {
   items: CartItem[];
   discount: number;
   extraDiscount?: number;
+  transportationCost?: number;
   createdAt: string;
   tax: number;
   advancePaid?: number;
+  isEditingOrder?: boolean;
 }
 
 interface CartManagerProps {

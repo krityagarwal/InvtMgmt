@@ -41,6 +41,7 @@ export interface ProformaInvoice {
   clientPhone?: string;        
   referralSource?: string; 
   deliveryAddress?: string; 
+  transportation_cost?: number;
   photo_url?: string;
   attribute_metadata?: { label: string; qty: number }[] // Ensure this matches
 }
@@ -195,11 +196,12 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
   const extraDiscountAmount = pi.extra_discount_amount ?? 0;
   const writeOffAmount = pi.write_off_amount ?? 0;
   const taxableAmount = Math.max(0, subtotal - discountAmount - extraDiscountAmount);
+  const transportationCost = pi.transportation_cost ?? 0;
   const taxPercent = pi.tax_percent ?? 0;
   const taxAmount = pi.tax_amount ?? Math.ceil(taxableAmount * taxPercent / 100);
-  const finalTotal = pi.final_total ?? (taxableAmount + taxAmount);
+  const finalTotal = pi.final_total ?? (taxableAmount + taxAmount + transportationCost);
   const paidAmount = Number(pi.paidAmount || 0);
-  const balanceDue = finalTotal - paidAmount - writeOffAmount;
+  const balanceDue = finalTotal - paidAmount - writeOffAmount; // Transportation cost is part of final total
   const docTitle = docType === "INVOICE" ? "Invoice" : "Proforma Invoice";
   const docPrefix = docType === "INVOICE" ? "INV" : "PI";
   const docNumber = pi.piNumber || `${docPrefix}-${String(pi.id).slice(0, 8).toUpperCase()}`;
@@ -319,6 +321,12 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: '13px', color: '#dc2626' }}>
               <span>Extra Discount</span>
               <span style={{ fontWeight: '600' }}>−₹{extraDiscountAmount.toLocaleString('en-IN')}</span>
+            </div>
+          )}
+          {transportationCost > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: '13px', color: '#475569' }}>
+              <span>Transportation</span>
+              <span style={{ fontWeight: '600' }}>₹{transportationCost.toLocaleString('en-IN')}</span>
             </div>
           )}
           {taxPercent > 0 && taxAmount > 0 && (

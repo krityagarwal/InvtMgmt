@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { DollarSign, HandCoins, WalletCards, TrendingUp, ChevronDown, ChevronRight, Download } from "lucide-react";
+import React, { useState, useMemo } from "react";
+import { DollarSign, HandCoins, WalletCards, TrendingUp, ChevronDown, ChevronRight, Download, Edit } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -59,6 +59,7 @@ export interface Order {
   clientPhone?: string,        
   referralSource?: string, 
   deliveryAddress?: string,
+  transportation_cost?: number,
   payments?: PaymentRecord[],
   write_off_amount?: number,
   write_off_notes?: string,
@@ -73,6 +74,7 @@ interface OrdersProps {
   onRecordPayment: (orderId: string, amount: number, method: string, notes?: string) => void;
   onWriteOff: (orderId: string, amount: number, reason?: string, notes?: string) => void;
   onDownloadInvoice: (orderId: string) => void;
+  onEditOrder: (orderId: string) => void;
   onCancelOrder?: (orderId: string) => Promise<void> | void; // New callback handler tracking hook
   summary?: {
     totalRevenue: number;
@@ -83,7 +85,7 @@ interface OrdersProps {
   };
 }
 
-export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOffs, onRecordPayment, onWriteOff, onDownloadInvoice, onCancelOrder, summary }: OrdersProps) {
+export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOffs, onRecordPayment, onWriteOff, onDownloadInvoice, onEditOrder, onCancelOrder, summary }: OrdersProps) {
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [paymentOrder, setPaymentOrder] = useState<Order | null>(null);
@@ -231,6 +233,7 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
             onOpenPaymentModal={openPaymentModal}
             onOpenWriteOffModal={openWriteOffModal}
             onDownloadInvoice={onDownloadInvoice}
+            onEditOrder={onEditOrder}
             onCancelClick={handleCancelClick}
           />
         </CardContent>
@@ -264,7 +267,6 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
                 <Label className="text-[10px] uppercase font-bold text-gray-400">Amount</Label>
                 <Input
                   type="number"
-                  min={0}
                   step="1"
                   placeholder="Enter amount"
                   value={paymentAmount}
@@ -301,7 +303,7 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
             <Button variant="outline" onClick={() => setPaymentModalOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleSubmitPayment} disabled={!paymentAmount || Number(paymentAmount) <= 0}>
+            <Button onClick={handleSubmitPayment} disabled={!paymentAmount || Number(paymentAmount) === 0}>
               Record Payment
             </Button>
           </DialogFooter>
@@ -384,7 +386,7 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
   );
 }
 
-function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, onOpenPaymentModal, onOpenWriteOffModal, onDownloadInvoice,onCancelClick }: any) {
+function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, onOpenPaymentModal, onOpenWriteOffModal, onDownloadInvoice, onEditOrder, onCancelClick }: any) {
   return (
     <Table>
       <TableHeader>
@@ -466,7 +468,16 @@ function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, o
                     clientName={order.customerName}
                     date={order.date}
                     items={order.items || []}
-                    financial={order}
+                    financial={{
+                      subtotal: order.subtotal,
+                      discount_amount: order.discount_amount,
+                      extra_discount_amount: order.extra_discount_amount,
+                      tax_amount: order.tax_amount,
+                      final_total: order.final_total,
+                      paidAmount: order.paidAmount,
+                      write_off_amount: order.write_off_amount,
+                      transportation_cost: order.transportation_cost,
+                    }}
                   />
                   <div className="px-6 pb-6">
                     <div className="rounded-lg border bg-white p-4">
@@ -592,6 +603,16 @@ function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, o
                       Write-Off
                     </Button>
                   )}
+                {order.status === "sold" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mr-2 h-7 text-[10px] font-bold uppercase"
+                    onClick={(e) => { e.stopPropagation(); onEditOrder(order.id); }}
+                  >
+                    <Edit className="size-3 mr-1" /> Edit Order
+                  </Button>
+                )}
                   {!isCancelled && (
                     <Button
                       variant="ghost"

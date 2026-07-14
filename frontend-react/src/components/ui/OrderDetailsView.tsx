@@ -11,6 +11,7 @@ export interface FinancialData {
   final_total?: number;
   total?: number;
   write_off_amount?: number;
+  transportation_cost?: number;
 }
 
 export interface OrderDetailsViewProps {
@@ -79,6 +80,13 @@ export function OrderDetailsView({
           <div className="flex justify-between text-sm">
             <span className="text-gray-600">Extra Discount</span>
             <span className="text-red-600">-₹{(financial.extra_discount_amount || 0).toLocaleString()}</span>
+          </div>
+        )}
+
+        {(financial.transportation_cost || 0) > 0 && (
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-600">Transportation</span>
+            <span>₹{(financial.transportation_cost || 0).toLocaleString()}</span>
           </div>
         )}
 

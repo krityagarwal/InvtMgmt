@@ -82,7 +82,7 @@ export default function App() {
     totalWriteOff: 0,
     estimatedProfit: 0,
   });
-  const cartDraftRef = useRef<Record<string, { discount?: number; extraDiscount?: number; tax?: number }>>({});
+  const cartDraftRef = useRef<Record<string, Partial<ClientCart>>>({});
   const [showPIPreview, setShowPIPreview] = useState(false);
   const [piPreviewUrl, setPiPreviewUrl] = useState<string | null>(null);
   const [piPreviewData, setPiPreviewData] = useState<ProformaInvoice | null>(null);
@@ -126,6 +126,7 @@ export default function App() {
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const inventoryRequestIdRef = useRef(0);
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
 
   const viewRef = useRef(currentView);
 
@@ -288,18 +289,20 @@ useEffect(() => {
     subtotal: number,
     discountPercent: number,
     taxPercent: number,
-    extraDiscountAmount: number = 0
+    extraDiscountAmount: number = 0,
+    transportationCost: number = 0
   ) => {
     const safeSubtotal = Number(subtotal) || 0;
     const safeDiscount = Number(discountPercent) || 0;
     const safeTax = Number(taxPercent) || 0;
     const safeExtraDiscount = Math.max(0, Math.floor(Number(extraDiscountAmount) || 0));
+    const safeTransportationCost = Math.max(0, Math.floor(Number(transportationCost) || 0));
 
     const discountAmount = Math.floor(safeSubtotal * (safeDiscount / 100));
     const clampedExtraDiscount = Math.min(safeExtraDiscount, Math.max(0, Math.floor(safeSubtotal) - discountAmount));
     const taxableAmount = Math.max(0, safeSubtotal - discountAmount - clampedExtraDiscount);
     const taxAmount = Math.ceil(taxableAmount * (safeTax / 100));
-    const finalTotal = taxableAmount + taxAmount;
+    const finalTotal = taxableAmount + taxAmount + safeTransportationCost;
 
     return { discountAmount, extraDiscountAmount: clampedExtraDiscount, taxAmount, finalTotal };
   };
@@ -550,6 +553,7 @@ const handleBulkAdd = async (newItems: any[]) => {
         discount: o.discount_percent || 0,
         extra_discount_amount: o.extra_discount_amount || 0,
         items: [],
+        transportation_cost: o.transportation_cost || 0,
         paidAmount: o.paid_amount || 0,
         discount_amount: o.discount_amount || 0,
         tax_amount: o.tax_amount || 0,
@@ -587,6 +591,7 @@ const handleBulkAdd = async (newItems: any[]) => {
         extra_discount_amount: o.extra_discount_amount || 0,
         discount_amount: o.discount_amount || 0,
         tax_amount: o.tax_amount || 0,
+        transportation_cost: o.transportation_cost || 0,
         items: []
       }));
       
@@ -650,6 +655,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     try {
       // Find existing item to get current metadata for merging
       const currentCart = clientCarts.find(c => c.id === activeCartId);
+      const isEditingMode = currentCart?.isEditingOrder === true || editingOrderId === activeCartId;
       const existingItem = currentCart?.items.find(i => i.id === product.id);
       
       // LOGIC: Prepare the JSON metadata
@@ -662,28 +668,31 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         metadata.push({ label: attribute, qty: quantity }); // SOP: New location entry
       }
 
-      // 2. Prepare the payload for your correct /basket/add endpoint
-      const payload = {
-        order_id: activeCartId,
-        product_id: product.id,
-        qty: quantity, // The backend likely handles the increment, but we send the change
-        attribute_metadata: metadata // We pass the updated breakdown here
-      };
+      if (!isEditingMode) {
+        // 2. Prepare the payload for your correct /basket/add endpoint
+        const payload = {
+          order_id: activeCartId,
+          product_id: product.id,
+          qty: quantity,
+          attribute_metadata: metadata,
+        };
 
-      await apiCall(`${API_BASE_URL}/basket/add`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+        await apiCall(`${API_BASE_URL}/basket/add`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      }
 
       // 3. Update local UI state
+      let updatedCartSnapshot: ClientCart | undefined;
       setClientCarts((prev) =>
         prev.map((cart) => {
           if (cart.id !== activeCartId) return cart;
           
           const existing = cart.items.find((item) => item.id === product.id);
           if (existing) {
-            return {
+            updatedCartSnapshot = {
               ...cart,
               items: cart.items.map((item) =>
                 item.id === product.id 
@@ -691,8 +700,9 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
                   : item
               ),
             };
+            return updatedCartSnapshot;
           } else {
-            return {
+            updatedCartSnapshot = {
               ...cart,
               items: [
                 ...cart.items, 
@@ -706,11 +716,24 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
                 }
               ],
             };
+            return updatedCartSnapshot;
           }
         })
       );
+
+      if (updatedCartSnapshot) {
+        cartDraftRef.current[activeCartId] = {
+          ...cartDraftRef.current[activeCartId],
+          ...updatedCartSnapshot,
+          items: updatedCartSnapshot.items.map((item) => ({ ...item })),
+        };
+      }
       
-      toast.success(`Added ${quantity} units to ${attribute}`);
+      toast.success(
+        isEditingMode
+          ? `Added ${quantity} units to edit draft`
+          : `Added ${quantity} units to ${attribute}`
+      );
       setSearchResult(null);      
       setPendingQuantity(1);      
 
@@ -815,30 +838,131 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     }
   };
 
-    // Inside src/App.tsx
-    const handleUpdateQuantity = async (productId: string, newQuantity: number) => {
+  //   // Inside src/App.tsx
+  //   const handleUpdateQuantity = async (productId: string, newQuantity: number, isEditing: boolean = false) => {
+  //   if (!activeCartId) return;
+
+  //   // Find the current quantity in the local state to calculate the "change"
+  //   const currentCart = clientCarts.find(c => c.id === activeCartId);
+  //   const item = currentCart?.items.find(i => i.id === productId);
+  //   if (!item) return;
+
+  //   // // If we are editing, we ONLY update the local state. No API call.
+  //   // if (isEditing) {
+  //   //   setClientCarts(prev => prev.map(cart => cart.id === activeCartId ? { ...cart, items: cart.items.map(i => i.id === productId ? { ...i, quantity: newQuantity } : i).filter(i => i.quantity > 0) } : cart));
+      
+  //   //   // 🌟 FIX: Also update the draft ref so the changes are persisted on final update
+  //   //   cartDraftRef.current[activeCartId] = {
+  //   //     ...cartDraftRef.current[activeCartId],
+  //   //     // This part is tricky; we need to update the items in the draft.
+  //   //     // The easiest way is to just update the entire cart state in the draft.
+  //   //     ...(clientCarts.find(c => c.id === activeCartId) || {}),
+  //   //   };
+  //   //   return;
+  //   // }
+
+  //   // If we are editing, we ONLY update the local state. No API call.
+  //   if (isEditing) {
+  //     // 1. Calculate the exact next state array structure inline
+  //     const adjustedCarts = clientCarts.map(cart => 
+  //       cart.id === activeCartId 
+  //         ? { 
+  //             ...cart, 
+  //             items: cart.items.map(i => i.id === productId ? { ...i, quantity: newQuantity } : i).filter(i => i.quantity > 0) 
+  //           } 
+  //         : cart
+  //     );
+
+  //     // 2. Commit to React UI immediately
+  //     setClientCarts(adjustedCarts);
+      
+  //     // 3. Find our updated instance from the new reference pool
+  //     const updatedTargetCart = adjustedCarts.find(c => c.id === activeCartId);
+
+  //     // 4. Update the draft ref with the fresh array pool
+  //     cartDraftRef.current[activeCartId] = {
+  //       ...cartDraftRef.current[activeCartId],
+  //       ...updatedTargetCart
+  //     };
+  //     return;
+  //   }
+
+  //   const change = newQuantity - item.quantity; // The backend expects the delta (e.g., +1 or -1)
+    
+  //   try {
+  //     // apiCall handles setIsLoading(true), the fetch, and setIsLoading(false)
+  //     await apiCall(`${API_BASE_URL}/order/update-qty`, {
+  //       method: "POST",
+  //       headers: { "Content-Type": "application/json" },
+  //       body: JSON.stringify({
+  //         order_id: activeCartId,
+  //         product_id: productId,
+  //         change: change
+  //       }),
+  //     });
+
+  //     // If we are here, the API call was successful. Update local state.
+  //     setClientCarts((prev) =>
+  //       prev.map((cart) => {
+  //         if (cart.id !== activeCartId) return cart;
+          
+  //         // If quantity becomes 0 or less, the backend deletes it, so we filter it out
+  //         const updatedItems = cart.items
+  //           .map((i) => (i.id === productId ? { ...i, quantity: newQuantity } : i))
+  //           .filter((i) => i.quantity > 0);
+
+  //         return { ...cart, items: updatedItems };
+  //       })
+  //     );
+  //   } catch (error) {
+  //     // The specific error toast is already handled inside apiCall
+  //     console.error("Quantity update failed:", error);
+  //   }
+  // };
+
+  const handleUpdateQuantity = async (productId: string, newQuantity: number, isEditing: boolean = false) => {
     if (!activeCartId) return;
 
-    // Find the current quantity in the local state to calculate the "change"
+    // 1. Pull the absolute freshest state snapshot out of clientCarts right now[cite: 8]
     const currentCart = clientCarts.find(c => c.id === activeCartId);
-    const item = currentCart?.items.find(i => i.id === productId);
+    if (!currentCart) return;
+
+    const item = currentCart.items.find(i => i.id === productId);
     if (!item) return;
 
-    // 2. Find the product in master list to check available stock
-    const product = products.find(p => p.id === productId);
-    const totalAvailableStock = product ? (product.displayStock + product.godownStock) : 0;
+    // 🌟 FIX: Force edit sandbox behavior if the cart object itself has the editing flag set!
+    const forceEditMode = currentCart.isEditingOrder === true;
 
-    // 3. Validation: Prevent increasing quantity beyond total stock
-    // if (newQuantity > item.quantity && newQuantity > totalAvailableStock) {
-    //   // Use your existing toast notification system if available
-    //   alert(`Cannot exceed available stock (${totalAvailableStock} units)`); 
-    //   return;
-    // }
+    if (forceEditMode) {
+      const adjustedCarts = clientCarts.map((cart) =>
+        cart.id !== activeCartId
+          ? cart
+          : {
+              ...cart,
+              items: cart.items
+                .map((i) => (i.id === productId ? { ...i, quantity: newQuantity } : i))
+                .filter((i) => i.quantity > 0),
+            }
+      );
 
-    const change = newQuantity - item.quantity; // The backend expects the delta (e.g., +1 or -1)
+      const updatedTargetCart = adjustedCarts.find((cart) => cart.id === activeCartId);
+
+      setClientCarts(adjustedCarts);
+
+      if (updatedTargetCart) {
+        cartDraftRef.current[activeCartId] = {
+          ...cartDraftRef.current[activeCartId],
+          ...updatedTargetCart,
+          items: updatedTargetCart.items.map((item) => ({ ...item })),
+        };
+      }
+      return;
+    }
+
+    // --- Normal shopping cart route (API sync delta) ---[cite: 8]
+    const change = newQuantity - item.quantity; 
     
     try {
-      // apiCall handles setIsLoading(true), the fetch, and setIsLoading(false)
       await apiCall(`${API_BASE_URL}/order/update-qty`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -849,12 +973,9 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         }),
       });
 
-      // If we are here, the API call was successful. Update local state.
       setClientCarts((prev) =>
         prev.map((cart) => {
           if (cart.id !== activeCartId) return cart;
-          
-          // If quantity becomes 0 or less, the backend deletes it, so we filter it out
           const updatedItems = cart.items
             .map((i) => (i.id === productId ? { ...i, quantity: newQuantity } : i))
             .filter((i) => i.quantity > 0);
@@ -863,7 +984,6 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         })
       );
     } catch (error) {
-      // The specific error toast is already handled inside apiCall
       console.error("Quantity update failed:", error);
     }
   };
@@ -871,25 +991,40 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
   // Inside src/App.tsx
   const handleRemoveItem = async (productId: string) => {
     if (!activeCartId) return;
+    const currentCart = clientCarts.find((cart) => cart.id === activeCartId);
+    const isEditingMode = currentCart?.isEditingOrder === true || editingOrderId === activeCartId;
 
     try {
-      await apiCall(
-        `${API_BASE_URL}/order/remove-item?order_id=${activeCartId}&product_id=${productId}`,
-        { method: "DELETE" }
-      );
-
+      let updatedCartForEdit: ClientCart | undefined;
       setClientCarts((prev) =>
         prev.map((cart) => {
           if (cart.id !== activeCartId) return cart;
-          return {
+          const nextCart = {
             ...cart,
             items: cart.items.filter((item) => item.id !== productId),
           };
+          updatedCartForEdit = nextCart;
+          return nextCart;
         })
       );
+
+      if (updatedCartForEdit) {
+        cartDraftRef.current[activeCartId] = {
+          ...cartDraftRef.current[activeCartId],
+          ...updatedCartForEdit,
+          items: updatedCartForEdit.items.map((item) => ({ ...item })),
+        };
+      }
+
+      if (!isEditingMode) {
+        await apiCall(
+          `${API_BASE_URL}/order/remove-item?order_id=${activeCartId}&product_id=${productId}`,
+          { method: "DELETE" }
+        );
+      }
       toast.info("Item removed from session");
     } catch (error) {
-      toast.error("Could not remove item from server");
+      toast.error(isEditingMode ? "Could not remove item from edit draft" : "Could not remove item from server");
     }
   };
 
@@ -898,32 +1033,46 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     metadata: { label: string; qty: number }[]
   ) => {
     if (!activeCartId) return;
+    const currentCart = clientCarts.find((cart) => cart.id === activeCartId);
+    const isEditingMode = currentCart?.isEditingOrder === true || editingOrderId === activeCartId;
 
     try {
-      await apiCall(`${API_BASE_URL}/order/update-item-metadata`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          order_id: activeCartId,
-          product_id: productId,
-          attribute_metadata: metadata,
-        }),
-      });
-
+      let updatedCartSnapshot: ClientCart | undefined;
       setClientCarts((prev) =>
         prev.map((cart) => {
           if (cart.id !== activeCartId) return cart;
-          return {
+          updatedCartSnapshot = {
             ...cart,
             items: cart.items.map((line) =>
               line.id === productId ? { ...line, attribute_metadata: metadata } : line
             ),
           };
+          return updatedCartSnapshot;
         })
       );
+
+      if (updatedCartSnapshot) {
+        cartDraftRef.current[activeCartId] = {
+          ...cartDraftRef.current[activeCartId],
+          ...updatedCartSnapshot,
+          items: updatedCartSnapshot.items.map((item) => ({ ...item })),
+        };
+      }
+
+      if (!isEditingMode) {
+        await apiCall(`${API_BASE_URL}/order/update-item-metadata`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            order_id: activeCartId,
+            product_id: productId,
+            attribute_metadata: metadata,
+          }),
+        });
+      }
     } catch (error) {
       console.error("Room update failed:", error);
-      toast.error("Failed to update room");
+      toast.error(isEditingMode ? "Failed to update room in edit draft" : "Failed to update room");
     }
   };
 
@@ -1250,6 +1399,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         discount_amount: details.discount_amount || target.discount_amount || 0,
         extra_discount_amount: details.extra_discount_amount || target.extra_discount_amount || 0,
         discount_percent: details.discount_percent ?? target.discount_percent ?? target.discount ?? 0,
+        transportation_cost: details.transportation_cost ?? target.transportation_cost ?? 0,
         tax_percent: details.tax_percent ?? target.tax_percent ?? 0,
         tax_amount: details.tax_amount || target.tax_amount || 0,
         final_total: details.final_total || target.final_total || target.total || 0,
@@ -1281,6 +1431,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       return {
         ...cart,
         discount: draft.discount ?? cart.discount,
+          transportationCost: draft.transportationCost ?? cart.transportationCost ?? 0,
         extraDiscount: draft.extraDiscount ?? cart.extraDiscount ?? 0,
         tax: 0,
       };
@@ -1298,6 +1449,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       discount_percent: Number(activeCart.discount) || 0,
       tax_percent: 0,
       extra_discount_amount: Number(activeCart.extraDiscount) || 0,
+      transportation_cost: Number(activeCart.transportationCost) || 0,
       paid_amount: Number(activeCart.advancePaid) || 0,
       referral_source: activeCart.referralSource || "",
       delivery_address: activeCart.deliveryAddress || "",
@@ -1314,7 +1466,8 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         subtotal,
         effectiveDiscount,
         effectiveTax,
-        effectiveExtraDiscount
+        effectiveExtraDiscount,
+        Number(activeCart.transportationCost) || 0
       );
 
       const previewInvoice: ProformaInvoice = {
@@ -1336,6 +1489,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         discount_amount: discountAmount,
         extra_discount_amount: extraDiscountAmount,
         discount_percent: effectiveDiscount,
+        transportation_cost: Number(activeCart.transportationCost) || 0,
         tax_percent: effectiveTax,
         tax_amount: taxAmount,
         final_total: finalTotal,
@@ -1508,6 +1662,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       return {
         ...cart,
         discount: draft.discount ?? cart.discount,
+        transportationCost: draft.transportationCost ?? cart.transportationCost ?? 0,
         extraDiscount: draft.extraDiscount ?? cart.extraDiscount ?? 0,
         tax: 0,
       };
@@ -1523,6 +1678,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
           discount_percent: Number(activeCart.discount) || 0,
           tax_percent: 0,
           extra_discount_amount: Number(activeCart.extraDiscount) || 0,
+          transportation_cost: Number(activeCart.transportationCost) || 0,
           paid_amount: activeCart.advancePaid || 0,
           referral_source: activeCart.referralSource || "",
           delivery_address: activeCart.deliveryAddress || "",
@@ -1546,6 +1702,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       return {
         ...cart,
         discount: draft.discount ?? cart.discount,
+        transportationCost: draft.transportationCost ?? cart.transportationCost ?? 0,
         extraDiscount: draft.extraDiscount ?? cart.extraDiscount ?? 0,
         tax: 0,
       };
@@ -1560,6 +1717,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         discount_percent: Number(activeCart.discount) || 0,
         tax_percent: 0,
         extra_discount_amount: Number(activeCart.extraDiscount) || 0,
+        transportation_cost: Number(activeCart.transportationCost) || 0,
         paid_amount: activeCart.advancePaid || 0,
         referral_source: activeCart.referralSource || "",
         delivery_address: activeCart.deliveryAddress || "",
@@ -1576,7 +1734,8 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         subtotal,
         effectiveDiscount,
         effectiveTax,
-        effectiveExtraDiscount
+        effectiveExtraDiscount,
+        Number(activeCart.transportationCost) || 0
       );
       const previewPI: ProformaInvoice = {
         id: cartIdToConvert,
@@ -1597,6 +1756,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         discount_amount: discountAmount,
         extra_discount_amount: extraDiscountAmount,
         discount_percent: effectiveDiscount,
+        transportation_cost: Number(activeCart.transportationCost) || 0,
         tax_percent: effectiveTax,
         tax_amount: taxAmount,
         final_total: finalTotal,
@@ -1666,6 +1826,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         discount: data.discount_percent ?? 0,
         extraDiscount: data.extra_discount_amount ?? 0,
         tax: data.tax_percent ?? 0,
+        transportationCost: data.transportation_cost ?? 0,
         advancePaid: data.paid_amount || 0,
         referralSource: data.referral_source || "",
         deliveryAddress: data.delivery_address || "",
@@ -1677,6 +1838,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
         ...cartDraftRef.current[pi.id],
         discount: Number(data.discount_percent ?? 0),
         extraDiscount: Number(data.extra_discount_amount ?? 0),
+        transportationCost: Number(data.transportation_cost ?? 0),
         tax: Number(data.tax_percent ?? 0),
       };
 
@@ -1692,6 +1854,142 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
     } catch (error) {
       console.error("Edit PI Error:", error);
       toast.error("Failed to load PI details for editing");
+    }
+  };
+
+  const handleEditOrder = async (orderId: string) => {
+    if (!window.confirm("Editing this order will open a local draft only. Are you sure you want to proceed?")) {
+      return;
+    }
+
+    try {
+      // Load the sold order into a local-only edit draft.
+      const data = await apiCall(`${API_BASE_URL}/basket/details/${orderId}`);
+
+      const newCart: ClientCart = {
+        id: orderId,
+        items: (data.order_items || []).map((item: any) => ({
+          id: item.product_id,
+          name: item.item_code,
+          price: item.unit_price,
+          quantity: item.quantity,
+          attribute_metadata: item.attribute_metadata || [],
+        })),
+        // 🌟 FIX: Map backend snake_case keys explicitly to cart configuration fields
+        clientName: data.client_name || "Unknown",
+        clientPhone: data.client_phone || "",
+        deliveryAddress: data.delivery_address || "",
+        referralSource: data.referral_source || "",
+        discount: Number(data.discount_percent) || 0,
+        extraDiscount: Number(data.extra_discount_amount) || 0,
+        transportationCost: Number(data.transportation_cost) || 0,
+        advancePaid: Number(data.paid_amount) || 0,
+        createdAt: data.created_at || new Date().toISOString(),
+        isEditingOrder: true, // This flag is crucial
+        tax: 0, // Assuming tax is reset or recalculated
+      };
+
+      // Sync the mutable reference cache tracker so typing works immediately
+      cartDraftRef.current[orderId] = {
+        isEditingOrder: true,
+        items: newCart.items.map((item) => ({ ...item })),
+        discount: Number(data.discount_percent) || 0,
+        extraDiscount: Number(data.extra_discount_amount) || 0,
+        transportationCost: Number(data.transportation_cost) || 0,
+        clientName: newCart.clientName,
+        clientPhone: newCart.clientPhone,
+        deliveryAddress: newCart.deliveryAddress,
+        referralSource: newCart.referralSource,
+        advancePaid: newCart.advancePaid,
+        tax: newCart.tax,
+      };
+
+      // Load it into the cart view for editing
+      setClientCarts((prev) => [...prev.filter((c) => c.id !== orderId), newCart]);
+      setActiveCartId(orderId);
+      setEditingOrderId(orderId);
+      setCurrentView("cart");
+      toast.success("Order loaded into cart for editing. Please finalize your changes.");
+    } catch (error) {
+      toast.error("Failed to prepare order for editing.");
+    }
+  };
+
+  const handleUpdateFinalSale = async () => {
+    const activeCartState = activeCartId
+      ? clientCarts.find((cart) => cart.id === activeCartId)
+      : undefined;
+    const draftCart = activeCartId ? cartDraftRef.current[activeCartId] : undefined;
+    const freshActiveCart = activeCartId
+      ? ({
+          ...activeCartState,
+          ...draftCart,
+          items: (draftCart?.items || activeCartState?.items || []).map((item) => ({ ...item })),
+        } as ClientCart)
+      : undefined;
+    const isEditMode =
+      editingOrderId === activeCartId ||
+      freshActiveCart?.isEditingOrder === true ||
+      activeCartState?.isEditingOrder === true;
+
+    if (!freshActiveCart || !isEditMode) {
+      toast.error("This cart is not in edit mode.");
+      return;
+    }
+
+    try {
+      const payload = {
+        order_id: freshActiveCart.id,
+        items: freshActiveCart.items.map((item) => ({
+          product_id: item.id,
+          quantity: Number(item.quantity) || 0,
+          unit_price: Number(item.price) || 0,
+          attribute_metadata: item.attribute_metadata || [],
+        })),
+        discount_percent: Number(freshActiveCart.discount) || 0,
+        extra_discount_amount: Number(freshActiveCart.extraDiscount) || 0,
+        transportation_cost: Number(freshActiveCart.transportationCost) || 0,
+        paid_amount: Number(freshActiveCart.advancePaid) || 0,
+        client_name: freshActiveCart.clientName || "",
+        client_phone: freshActiveCart.clientPhone || "",
+        delivery_address: freshActiveCart.deliveryAddress || "",
+        referral_source: freshActiveCart.referralSource || "",
+      };
+
+      console.log("Finalize edit payload:", payload);
+      const response = await apiCall(`${API_BASE_URL}/order/finalize-edit`, {
+        method: "POST",
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      toast.success("Order updated successfully!");
+      // After successful update, clear the cart and go back to orders
+      setClientCarts(prev => prev.filter(c => c.id !== freshActiveCart.id));
+      delete cartDraftRef.current[freshActiveCart.id];
+      setActiveCartId(null);
+      setEditingOrderId(null);
+      setCurrentView("orders");
+      // Optionally, refresh orders list to show the updated data immediately
+      await handleLoadOrders(true);
+
+    } catch (error) {
+      toast.error("Failed to update order.");
+    }
+  };
+
+  const handleCancelEdit = async () => {
+    if (!activeCartId || !editingOrderId) return;
+
+    try {
+      setClientCarts((prev) => prev.filter((cart) => cart.id !== activeCartId));
+      delete cartDraftRef.current[activeCartId];
+      setActiveCartId(null);
+      setEditingOrderId(null);
+      setCurrentView("orders");
+      toast.success("Edit cancelled.");
+    } catch (error) {
+      toast.error("Failed to cancel edit.");
     }
   };
 
@@ -1723,6 +2021,20 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       })
     );
   };
+
+  const handleUpdateTransportationCost = (amount: number) => {
+    if (!activeCartId) return;
+    cartDraftRef.current[activeCartId] = {
+      ...cartDraftRef.current[activeCartId],
+      transportationCost: amount,
+    };
+    setClientCarts((prev) =>
+      prev.map((cart) =>
+        cart.id !== activeCartId ? cart : { ...cart, transportationCost: amount }
+      )
+    );
+  };
+
 
 const handleCancelOrder = async (orderId: string) => {
     try {
@@ -1862,6 +2174,11 @@ const handleCancelOrder = async (orderId: string) => {
 
   const handleUpdateCartMetadata = (field: keyof ClientCart, value: string) => {
     if (!activeCartId) return;
+
+    cartDraftRef.current[activeCartId] = {
+      ...cartDraftRef.current[activeCartId],
+      [field]: value,
+    };
 
     setClientCarts((prevCarts) =>
       prevCarts.map((cart) =>
@@ -2007,6 +2324,7 @@ return (
                 onRecordPayment={handleRecordPayment}
                 onFetchWriteOffs={handleFetchWriteOffs}
                 onWriteOff={handleWriteOff}
+                onEditOrder={handleEditOrder}
                 onDownloadInvoice={handleDownloadInvoice}
                 onCancelOrder={handleCancelOrder}
                 summary={orderSummary}
@@ -2048,9 +2366,12 @@ return (
                   clientName={activeCart?.clientName || null}
                   discount={activeCart?.discount || 0}
                   extraDiscount={activeCart?.extraDiscount || 0}
+                  transportationCost={activeCart?.transportationCost || 0}
                   activeCart={activeCart}
                   activeCartId={activeCartId}
-                  onUpdateQuantity={handleUpdateQuantity}
+                  isEditingOrder={editingOrderId === activeCartId || activeCart?.isEditingOrder === true}
+                  // onUpdateQuantity={(id, qty) => handleUpdateQuantity(id, qty, activeCart?.isEditingOrder)}
+                  onUpdateQuantity={(id, qty) => handleUpdateQuantity(id, qty, true)}
                   onRemoveItem={handleRemoveItem}
                   onCheckout={handleCheckout}
                   onUpdateDiscount={handleUpdateDiscount}
@@ -2062,6 +2383,9 @@ return (
                   onUpdatePhone={(val) => handleUpdateCartMetadata('clientPhone', val)}
                   onUpdateReferral={(val) => handleUpdateCartMetadata('referralSource', val)}
                   onUpdateItemRoom={handleUpdateItemRoom}
+                  onUpdateTransportationCost={handleUpdateTransportationCost}
+                  onUpdateFinalSale={handleUpdateFinalSale}
+                  onCancelEdit={handleCancelEdit}
                 />
               </div>
             )}
@@ -2084,6 +2408,7 @@ return (
                   discount_percent: o.discount_percent,
                   tax_percent: o.tax_percent,
                   tax_amount: o.tax_amount,
+                  transportation_cost: o.transportation_cost,
                   final_total: o.final_total,
                   paidAmount: o.paidAmount || 0,
                   total: o.total,
