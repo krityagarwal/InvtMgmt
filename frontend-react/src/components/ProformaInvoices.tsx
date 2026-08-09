@@ -231,7 +231,7 @@ export function PrintLayout({ pi, docType = "PI" }: { pi?: ProformaInvoice; docT
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '24px' }}>
         <div style={{ padding: '12px 14px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
           <p style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1.2px', color: '#94a3b8', fontWeight: '700', margin: 0 }}>Bill To</p>
-          <p style={{ fontWeight: '700', fontSize: '14px', margin: '6px 0 0 0', color: '#0f172a' }}>{pi.clientName || "Walk-in Customer"}</p>
+          <p style={{ fontWeight: '700', fontSize: '14px', margin: '6px 0 0 0', color: '#0f172a', textTransform: 'capitalize' }}>{pi.clientName || "Walk-in Customer"}</p>
           <p style={{ fontSize: '11px', color: '#475569', margin: '4px 0 0 0' }}>
             {pi.clientPhone || "-"}
           </p>
@@ -425,10 +425,20 @@ function PITable({
                   {expandedPIId === pi.id ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
                 </TableCell>
                 <TableCell className="font-mono text-sm">{pi.piNumber}</TableCell>
-                <TableCell className="font-medium">{pi.clientName}</TableCell>
+                <TableCell className="font-medium capitalize">{pi.clientName}</TableCell>
                 <TableCell>
                   <div className="flex flex-col gap-1.5 items-start">
-                    <Badge variant="outline" className="text-[10px]">{pi.status}</Badge>
+                    <Badge 
+                      variant="outline" 
+                      className={`text-[10px] ${
+                        pi.status === 'approved' ? 'bg-green-50 text-green-700 border-green-200' :
+                        pi.status === 'draft' ? 'bg-slate-50 text-slate-600 border-slate-200' :
+                        pi.status === 'sent' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                        'bg-yellow-50 text-yellow-700 border-yellow-200'
+                      }`}
+                    >
+                      {pi.status}
+                    </Badge>
                     {hasShortage && (
                       <Badge className="bg-red-100 text-red-700 border-red-200 text-[9px] font-bold py-0 leading-tight">
                         Stock Shortage

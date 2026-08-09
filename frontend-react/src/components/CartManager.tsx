@@ -100,7 +100,7 @@ export function CartManager({
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-2">
                         <User className="size-4 text-gray-500" />
-                        <h3 className="font-medium">{cart.clientName}</h3>
+                        <h3 className="font-medium capitalize">{cart.clientName}</h3>
                         {cart.id === activeCartId && (
                           <Badge className="bg-blue-500">Active</Badge>
                         )}

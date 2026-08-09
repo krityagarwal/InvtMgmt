@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { DollarSign, HandCoins, WalletCards, TrendingUp, ChevronDown, ChevronRight, Download, Edit } from "lucide-react";
+import { DollarSign, HandCoins, WalletCards, TrendingUp, ChevronDown, ChevronRight, Download, Edit, MoreHorizontal, Trash2, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -16,6 +16,14 @@ import {
   TableRow,
 } from "./ui/table";
 import { OrderDetailsView } from "./ui/OrderDetailsView";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 
 export interface OrderItem {
   name: string;
@@ -164,9 +172,9 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
   const getStatusColor = (status: Order["status"]| "cancelled") => {
     switch (status) {
       case "bucket": return "bg-gray-400"; // Changed to gray for drafts
-      case "pi": return "bg-yellow-500";  
-      case "sold": return "bg-green-500";
-      case "cancelled": return "bg-red-500 text-white"; // Red alert design flag
+      case "pi": return "bg-yellow-100 text-yellow-800 border-yellow-200";  
+      case "sold": return "bg-emerald-50 text-emerald-700 border-emerald-200";
+      case "cancelled": return "bg-red-100 text-red-700 border-red-200"; // Red alert design flag
       default: return "bg-gray-500";
     }
   };
@@ -174,53 +182,63 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
   return (
     <div className="space-y-6">
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-        <Card className="min-w-0">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-0.5 pt-3 px-3">
             <CardTitle className="text-[11px] leading-tight">Total Revenue</CardTitle>
-            <DollarSign className="size-3.5 text-gray-500" />
+            <div className="p-1.5 rounded-full bg-green-100/70">
+              <TrendingUp className="size-3 text-green-700" />
+            </div>
           </CardHeader>
           <CardContent className="px-3 pb-3 pt-0.5">
-            <div className="text-base md:text-lg font-bold leading-none truncate">₹{totalRevenue.toLocaleString()}</div>
+            <div className="text-xl font-bold leading-none truncate">₹{Math.round(totalRevenue).toLocaleString('en-IN')}</div>
           </CardContent>
         </Card>
-        <Card className="min-w-0">
+        <Card className="border-l-4 border-l-green-300">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-0.5 pt-3 px-3">
             <CardTitle className="text-[11px] leading-tight">Amount Received</CardTitle>
-            <HandCoins className="size-3.5 text-gray-500" />
+            <div className="p-1.5 rounded-full bg-green-100/70">
+              <HandCoins className="size-3 text-green-700" />
+            </div>
           </CardHeader>
           <CardContent className="px-3 pb-3 pt-0.5">
-            <div className="text-base md:text-lg font-bold leading-none truncate">₹{totalReceived.toLocaleString()}</div>
+            <div className="text-xl font-bold leading-none truncate text-green-800">₹{Math.round(totalReceived).toLocaleString('en-IN')}</div>
             <p className="text-[10px] text-slate-500 mt-1">Customer payments</p>
           </CardContent>
         </Card>
-        <Card className="min-w-0">
+        <Card className="border-l-4 border-l-amber-300">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-0.5 pt-3 px-3">
             <CardTitle className="text-[11px] leading-tight">Amount Due</CardTitle>
-            <WalletCards className="size-3.5 text-gray-500" />
+            <div className="p-1.5 rounded-full bg-amber-100">
+              <AlertTriangle className="size-3 text-amber-700" />
+            </div>
           </CardHeader>
           <CardContent className="px-3 pb-3 pt-0.5">
-            <div className="text-base md:text-lg font-bold leading-none truncate">₹{totalDue.toLocaleString()}</div>
+            <div className="text-xl font-bold leading-none truncate text-amber-800">₹{Math.round(totalDue).toLocaleString('en-IN')}</div>
             <p className="text-[10px] text-slate-500 mt-1">Pending from customers</p>
           </CardContent>
         </Card>
-        <Card className="min-w-0">
+        <Card className="border-l-4 border-l-slate-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-0.5 pt-3 px-3">
             <CardTitle className="text-[11px] leading-tight">Write-Off Total</CardTitle>
-            <HandHelping className="size-3.5 text-gray-500" />
+            <div className="p-1.5 rounded-full bg-slate-100">
+              <HandHelping className="size-3 text-slate-600" />
+            </div>
           </CardHeader>
           <CardContent className="px-3 pb-3 pt-0.5">
-            <div className="text-base md:text-lg font-bold leading-none truncate">₹{totalWriteOff.toLocaleString()}</div>
+            <div className="text-xl font-bold leading-none truncate text-slate-700">₹{Math.round(totalWriteOff).toLocaleString('en-IN')}</div>
             <p className="text-[10px] text-slate-500 mt-1">Closed without payment</p>
           </CardContent>
         </Card>
-        <Card className="min-w-0">
+        <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-0.5 pt-3 px-3">
             <CardTitle className="text-[11px] leading-tight">Estimated Profit</CardTitle>
-            <TrendingUp className="size-3.5 text-gray-500" />
+            <div className="p-1.5 rounded-full bg-blue-100/70">
+              <DollarSign className="size-3 text-blue-700" />
+            </div>
           </CardHeader>
           <CardContent className="px-3 pb-3 pt-0.5">
-            <div className="text-base md:text-lg font-bold leading-none truncate">₹{estimatedProfit.toLocaleString()}</div>
+            <div className="text-xl font-bold leading-none truncate">₹{Math.round(estimatedProfit).toLocaleString('en-IN')}</div>
             <p className="text-[10px] text-slate-500 mt-1">Assuming all due collected</p>
           </CardContent>
         </Card>
@@ -290,7 +308,7 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
               <div className="rounded-md border bg-slate-50 p-3 text-xs text-slate-600">
                 <div className="flex items-center justify-between">
                   <span>Customer</span>
-                  <span className="font-medium text-slate-900">{paymentOrder.customerName}</span>
+                  <span className="font-medium text-slate-900 capitalize">{paymentOrder.customerName}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Order #</span>
@@ -361,7 +379,7 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
               <div className="rounded-md border bg-slate-50 p-3 text-xs text-slate-600">
                 <div className="flex items-center justify-between">
                   <span>Customer</span>
-                  <span className="font-medium text-slate-900">{writeOffOrder.customerName}</span>
+                  <span className="font-medium text-slate-900 capitalize">{writeOffOrder.customerName}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Order #</span>
@@ -599,84 +617,83 @@ function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, o
                   {expandedOrderId === order.id ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
                 </TableCell>
                 <TableCell className="font-mono text-xs">{order.orderNumber}</TableCell>
-                <TableCell className={isCancelled ? "text-slate-400" : ""}>{order.customerName}</TableCell>
-                <TableCell>{order.date}</TableCell>
+                <TableCell className={`capitalize ${isCancelled ? "text-slate-400" : ""}`}>{order.customerName}</TableCell>
+                <TableCell className="text-slate-500 text-xs">
+                  {new Date(order.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                </TableCell>
                 <TableCell>₹{order.total.toLocaleString()}</TableCell>
-                <TableCell className={isCancelled ? "text-slate-400" : "text-green-600"}>
+                <TableCell className={
+                  (() => {
+                    const balance = order.total - (order.paidAmount || 0) - (order.write_off_amount || 0);
+                    if (isCancelled || balance <= 0) return "text-slate-400";
+                    return "text-green-600 font-semibold";
+                  })()
+                }>
                   ₹{(order.paidAmount || 0).toLocaleString()}
                 </TableCell>
-                <TableCell className={`font-bold ${
-                  isCancelled 
-                    ? "text-slate-400" 
-                    : order.total - (order.paidAmount || 0) - (order.write_off_amount || 0) > 0 
-                      ? 'text-red-600' 
-                      : 'text-gray-900'
-                }`}>
-                  ₹{(order.total - (order.paidAmount || 0) - (order.write_off_amount || 0)).toLocaleString()}
+                <TableCell className={`font-bold ${(() => {
+                  const balance = order.total - (order.paidAmount || 0) - (order.write_off_amount || 0);
+                  if (isCancelled) return "text-slate-400";
+                  if (balance > 0) return "text-amber-700";
+                  return "text-slate-400";
+                })()}`}>
+                  ₹{(order.total - (order.paidAmount || 0) - (order.write_off_amount || 0)).toLocaleString('en-IN')}
                 </TableCell>
+
                 <TableCell>
                   <Badge className={getStatusColor(order.status)}>{order.status}</Badge>
                 </TableCell>
                 <TableCell className="text-right">
-                  {!isCancelled && (order.total - (order.paidAmount || 0) - (order.write_off_amount || 0)) > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mr-2 h-7 text-[10px] font-bold uppercase"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onOpenPaymentModal(order);
-                      }}
-                    >
-                      Record Payment
-                    </Button>
-                  )}
-                  {!isCancelled && (order.total - (order.paidAmount || 0) - (order.write_off_amount || 0)) > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mr-2 h-7 text-[10px] font-bold uppercase"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onOpenWriteOffModal(order);
-                      }}
-                    >
-                      Write-Off
-                    </Button>
-                  )}
-                {order.status === "sold" && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mr-2 h-7 text-[10px] font-bold uppercase"
-                    onClick={(e) => { e.stopPropagation(); onEditOrder(order.id); }}
-                  >
-                    <Edit className="size-3 mr-1" /> Edit
-                  </Button>
-                )}
-                  {!isCancelled && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-[10px] font-bold uppercase text-red-500 hover:text-red-700 hover:bg-red-50 mr-2"
-                      onClick={(e) => onCancelClick(e, order)}
-                    >
-                      Cancel
-                    </Button>
-                  )}
-                  {order.status === "sold" && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      title="Download Invoice"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDownloadInvoice(order.id);
-                      }}
-                    >
-                      <Download className="size-4" />
-                    </Button>
-                  )}
+                  <div className="flex items-center justify-end gap-1">
+                    {!isCancelled && (order.total - (order.paidAmount || 0) - (order.write_off_amount || 0)) > 0 && (
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-7 w-7 bg-green-50 text-green-700 border-green-200 hover:bg-green-100 hover:text-green-800"
+                        title="Record Payment"
+                        onClick={(e) => { e.stopPropagation(); onOpenPaymentModal(order); }}
+                      >
+                        <WalletCards className="size-3.5" />
+                      </Button>
+                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" className="h-7 w-7 p-0" onClick={(e) => e.stopPropagation()}>
+                          <span className="sr-only">Open menu</span>
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                        <DropdownMenuItem onSelect={() => onDownloadInvoice(order.id)}>
+                          <Download className="mr-2 h-4 w-4" />
+                          Download Invoice
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        {!isCancelled && (order.total - (order.paidAmount || 0) - (order.write_off_amount || 0)) > 0 && (
+                           <DropdownMenuItem onSelect={() => onOpenWriteOffModal(order)}>
+                            <HandHelping className="mr-2 h-4 w-4" />
+                            Write-Off
+                          </DropdownMenuItem>
+                        )}
+                        {order.status === "sold" && (
+                          <DropdownMenuItem onSelect={() => onEditOrder(order.id)}>
+                            <Edit className="mr-2 h-4 w-4" />
+                            Edit
+                          </DropdownMenuItem>
+                        )}
+                        {!isCancelled && (
+                          <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onSelect={(e) => onCancelClick(e, order)}>
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              Cancel Order
+                            </DropdownMenuItem>
+                          </>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 </TableCell>
               </TableRow>
               

@@ -37,7 +37,7 @@ export function OrderDetailsView({
           <label className="text-xs text-gray-400 flex items-center gap-1">
             <User className="size-3"/> Client
           </label>
-          <p className="font-medium">{clientName}</p>
+          <p className="font-medium capitalize">{clientName}</p>
         </div>
         <div className="space-y-1">
           <label className="text-xs text-gray-400 flex items-center gap-1">

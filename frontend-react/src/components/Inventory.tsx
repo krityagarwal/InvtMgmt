@@ -104,12 +104,12 @@ export function Inventory({
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [printSelection, setPrintSelection] = useState<{ [key: string]: number }>({});
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [selectedProductDetails, setSelectedProductDetails] = useState<Record<string, ExtendedProduct>>({});
   const [priceSort, setPriceSort] = useState<{
     field: "cost_price" | "overhead_expense" | "selling_price" | null;
     direction: "asc" | "desc";
   }>({ field: null, direction: "asc" });
   const [categoryOptions, setCategoryOptions] = useState<CategoryOption[]>([]);
-  const [selectedProductDetails, setSelectedProductDetails] = useState<Record<string, ExtendedProduct>>({});
   const [vendorNames, setVendorNames] = useState<string[]>([]);
   const categories = React.useMemo(
   () => ["all", ...new Set(products.map(p => p.category))],
@@ -375,19 +375,19 @@ React.useEffect(() => {
   //   });
   // };
 
-  const toggleSelection = (product: ExtendedProduct) => {
+  const toggleSelection = (product: ExtendedProduct, isChecked: boolean) => {
     setPrintSelection(prev => {
       const newSelection = { ...prev };
-      if (newSelection[product.id]) {
+      if (isChecked) {
+        newSelection[product.id] = 1; // Tracks selection state
+        setSelectedProductDetails(prevDetails => ({ ...prevDetails, [product.id]: product }));
+      } else {
         delete newSelection[product.id];
         setSelectedProductDetails(prevDetails => {
           const newDetails = { ...prevDetails };
           delete newDetails[product.id];
           return newDetails;
         });
-      } else {
-        newSelection[product.id] = 1; // Tracks selection state
-        setSelectedProductDetails(prevDetails => ({ ...prevDetails, [product.id]: product }));
       }
       return newSelection;
     });
@@ -397,23 +397,28 @@ React.useEffect(() => {
 
 const toggleAll = () => {
   // 1. Check if all currently filtered products are already selected
-  const allFilteredSelected = sortedProducts.length > 0 && 
+  const allFilteredSelected = productsMatchingCurrentFilters.length > 0 && 
     sortedProducts.every(p => !!printSelection[p.id]);
 
   if (allFilteredSelected) {
     // 2. If all are selected, clear the selection for ONLY THESE visible items
     setPrintSelection(prev => {
       const newSelection = { ...prev };
-      sortedProducts.forEach(p => {
+      productsMatchingCurrentFilters.forEach(p => {
         delete newSelection[p.id];
       });
       return newSelection;
+    });
+    setSelectedProductDetails(prev => {
+      const newDetails = { ...prev };
+      productsMatchingCurrentFilters.forEach(p => delete newDetails[p.id]);
+      return newDetails;
     });
   } else {
     // 3. Otherwise, add all currently visible filtered products to the selection
     setPrintSelection(prev => {
       const newSelection = { ...prev };
-      sortedProducts.forEach(p => {
+      productsMatchingCurrentFilters.forEach(p => {
         newSelection[p.id] = 1; // Default quantity to 1
       });
       return newSelection;
@@ -871,8 +876,8 @@ const handlePrintLabels = () => {
                       >
                         <TableCell>
                           <Checkbox 
-                            checked={Boolean(printSelection[product.id])} 
-                            onCheckedChange={() => toggleSelection(product)}
+                            checked={!!printSelection[product.id]} 
+                            onCheckedChange={(checked) => toggleSelection(product, checked)}
                             className="cursor-pointer"
                           />
                         </TableCell>
@@ -1267,7 +1272,7 @@ const handlePrintLabels = () => {
         id="hidden-print-factory" 
         style={{ position: 'absolute', left: '-9999px', top: 0, opacity: 0 }}
       >
-        {products.filter(p => printSelection[p.id]).map((product) => {
+        {Object.values(selectedProductDetails).filter(p => printSelection[p.id]).map((product) => {
           // Get quantity from selection or default to 1
           const qty = printSelection[product.id] || 1;
           return Array.from({ length: qty }).map((_, i) => (
