@@ -33,6 +33,11 @@ export interface ExtendedProduct extends Product {
   createdAt: string;
   category_id: string; // Add this line
 }
+interface InventorySummary {
+  total_investment: number;
+  dead_stock_count: number;
+  godown_ratio: number;
+}
 
 interface InventoryProps {
   products: ExtendedProduct[];
@@ -46,6 +51,7 @@ interface InventoryProps {
   onLoadMore?: () => Promise<void>;
   hasMoreProducts?: boolean;
   onSearchChange?: (searchTerm: string) => void;
+  summary: InventorySummary | null;
   onFiltersChange?: (filters: InventoryFilterState) => void;
   totalProducts?: number;
   onDeleteItem?: (productId: string) => Promise<void>;
@@ -89,6 +95,7 @@ export function Inventory({
   onLoadMore,
   hasMoreProducts,
   onSearchChange,
+  summary,
   onFiltersChange,
   totalProducts,
   onDeleteItem,
@@ -351,15 +358,13 @@ React.useEffect(() => {
   };
 
   // 1. Updated Financial Logic (CP + OH)
-  const totalValue = products.reduce((sum, p) => sum + (p.overheadPrice * p.stock), 0);
+  const totalValue = summary?.total_investment ?? 0;
 
   // 2. Dead Stock Logic (>60 Days)
-  const deadStockCount = products.filter(p => calculateAging(p.createdAt) > 60).length;
+  const deadStockCount = summary?.dead_stock_count ?? 0;
 
   // 3. Storage Efficiency
-  const totalItems = products.reduce((sum, p) => sum + p.stock, 0);
-  const godownItems = products.reduce((sum, p) => sum + p.godownStock, 0);
-  const godownRatio = totalItems > 0 ? Math.round((godownItems / totalItems) * 100) : 0;
+  const godownRatio = summary?.godown_ratio ?? 0;
 
   // const toggleSelection = (productId: string) => {
   //   setPrintSelection(prev => {

@@ -40,7 +40,17 @@ const DEFAULT_INVENTORY_FILTERS: InventoryFilterState = {
   godownQty: { operator: "any", value: "" },
 };
 
+interface InventorySummary {
+  total_investment: number;
+  dead_stock_count: number;
+  godown_ratio: number;
+}
 type View = "home" | "scanner" | "inventory" | "orders" | "cart" | "proforma" | "history" | "dashboard" | "login";
+
+interface OrderDateFilter {
+  startDate: string | null;
+  endDate: string | null;
+}
 
 export default function App() {
   const isRenderableImageUrl = (url?: string | null) =>
@@ -55,6 +65,7 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [inventoryPagination, setInventoryPagination] = useState({ total: 0, skip: 0, limit: 20, hasMore: false });
   const [inventoryFilters, setInventoryFilters] = useState<InventoryFilterState>(DEFAULT_INVENTORY_FILTERS);
+  const [inventorySummary, setInventorySummary] = useState<InventorySummary | null>(null);
   const [searchResult, setSearchResult] = useState<Product | null>(null);
   const [showClientDialog, setShowClientDialog] = useState(false);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
@@ -124,6 +135,7 @@ export default function App() {
   const [auditEntityType, setAuditEntityType] = useState<string>("all");
   const [auditLoading, setAuditLoading] = useState(false);
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
+  const [orderDateFilters, setOrderDateFilters] = useState<OrderDateFilter>({ startDate: null, endDate: null });
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const inventoryRequestIdRef = useRef(0);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
@@ -418,14 +430,22 @@ const handleBulkAdd = async (newItems: any[]) => {
       params.set("godown_qty_value", activeFilters.godownQty.value);
     }
 
+    // 🌟 FIX: Fetch both inventory and summary data concurrently
     const requestId = ++inventoryRequestIdRef.current;
-    const data = await apiCall(`${API_BASE_URL}/inventory/${PRESELECTED_SHOP_ID}?${params.toString()}`);
+    const [inventoryData, summaryData] = await Promise.all([
+      apiCall(`${API_BASE_URL}/inventory/${PRESELECTED_SHOP_ID}?${params.toString()}`),
+      apiCall(`${API_BASE_URL}/inventory/summary/${PRESELECTED_SHOP_ID}`)
+    ]);
 
     if (requestId !== inventoryRequestIdRef.current) return;
     
     // Handle both old format (array) and new format (paginated object)
-    const items = Array.isArray(data) ? data : data.data || [];
-    const paginationInfo = Array.isArray(data) ? { total: items.length, skip: 0, limit: 20, hasMore: false } : data;
+    const items = Array.isArray(inventoryData) ? inventoryData : inventoryData.data || [];
+    const paginationInfo = Array.isArray(inventoryData) 
+      ? { total: items.length, skip: 0, limit: 20, hasMore: false } 
+      : inventoryData;
+
+    setInventorySummary(summaryData); // Set the summary state
     
     const mappedProducts = items.map((item: any) => ({
       id: item.id,
@@ -536,11 +556,21 @@ const handleBulkAdd = async (newItems: any[]) => {
     }
   };
 
-  const handleLoadOrders = async (force = false) => {
+  const handleLoadOrders = async (force = false, filters?: OrderDateFilter) => {
+    const currentFilters = filters ?? orderDateFilters;
     try {
+      const params = new URLSearchParams();
+      if (currentFilters.startDate) {
+        params.set("start_date", currentFilters.startDate);
+      }
+      if (currentFilters.endDate) {
+        params.set("end_date", currentFilters.endDate);
+      }
+      const queryString = params.toString();
+
       const [data, summary] = await Promise.all([
-        apiCall(`${API_BASE_URL}/orders/list/${PRESELECTED_SHOP_ID}`),
-        apiCall(`${API_BASE_URL}/orders/summary/${PRESELECTED_SHOP_ID}`),
+        apiCall(`${API_BASE_URL}/orders/list/${PRESELECTED_SHOP_ID}?${queryString}`),
+        apiCall(`${API_BASE_URL}/orders/summary/${PRESELECTED_SHOP_ID}?${queryString}`),
       ]);
       
       const mappedOrders: Order[] = data.map((o: any) => ({
@@ -572,6 +602,11 @@ const handleBulkAdd = async (newItems: any[]) => {
     } catch (error) {
       console.error("Failed to load orders:", error);
     }
+  };
+
+  const handleOrderDateFilterChange = async (filters: OrderDateFilter) => {
+    setOrderDateFilters(filters);
+    await handleLoadOrders(true, filters);
   };
 
   // Fetch proforma invoices with status=pi filter from backend
@@ -2311,6 +2346,7 @@ return (
                 onLoadMore={handleLoadMoreInventory}
                 hasMoreProducts={inventoryPagination.hasMore}
                 onFiltersChange={handleInventoryFiltersChange}
+                summary={inventorySummary}
                 onDeleteItem={handleDeleteItem}
                 totalProducts={inventoryPagination.total}
               />
@@ -2328,6 +2364,7 @@ return (
                 onDownloadInvoice={handleDownloadInvoice}
                 onCancelOrder={handleCancelOrder}
                 summary={orderSummary}
+                onDateFilter={handleOrderDateFilterChange}
               />
             )}
             {currentView === "dashboard" && (

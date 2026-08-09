@@ -83,9 +83,13 @@ interface OrdersProps {
     totalWriteOff: number;
     estimatedProfit: number;
   };
+  onDateFilter: (filters: {
+    startDate: string | null;
+    endDate: string | null;
+  }) => void;
 }
 
-export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOffs, onRecordPayment, onWriteOff, onDownloadInvoice, onEditOrder, onCancelOrder, summary }: OrdersProps) {
+export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOffs, onRecordPayment, onWriteOff, onDownloadInvoice, onEditOrder, onCancelOrder, summary, onDateFilter }: OrdersProps) {
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [paymentOrder, setPaymentOrder] = useState<Order | null>(null);
@@ -96,6 +100,9 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
   const [writeOffOrder, setWriteOffOrder] = useState<Order | null>(null);
   const [writeOffAmount, setWriteOffAmount] = useState<string>("");
   const [writeOffReason, setWriteOffReason] = useState<string>("Customer Waived");
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
+
   const [writeOffNotes, setWriteOffNotes] = useState<string>("");
   const handleCancelClick = async (e: React.MouseEvent, order: Order) => {
     e.stopPropagation(); // Stop row expansion when clicking the button
@@ -220,7 +227,41 @@ export function Orders({ orders, onFetchDetails, onFetchPayments, onFetchWriteOf
       </div>
 
       <Card>
-        <CardHeader><CardTitle>Order Management</CardTitle></CardHeader>
+        <CardHeader>
+          <div className="flex justify-between items-center">
+            <CardTitle>Order Management</CardTitle>
+            <div className="flex items-center gap-2">
+              <Input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="h-8 text-xs"
+              />
+              <span className="text-xs text-slate-500">to</span>
+              <Input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="h-8 text-xs"
+              />
+              <Button
+                size="sm"
+                onClick={() => onDateFilter({ startDate, endDate })}
+                className="h-8"
+              >Filter</Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setStartDate("");
+                  setEndDate("");
+                  onDateFilter({ startDate: null, endDate: null });
+                }}
+                className="h-8"
+              >Clear</Button>
+            </div>
+          </div>
+        </CardHeader>
         <CardContent>
           <div className="mt-1 mb-3 text-xs text-slate-500 font-medium">
             Showing {activeDisplayOrders.length} of {orders.length} records
@@ -610,7 +651,7 @@ function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, o
                     className="mr-2 h-7 text-[10px] font-bold uppercase"
                     onClick={(e) => { e.stopPropagation(); onEditOrder(order.id); }}
                   >
-                    <Edit className="size-3 mr-1" /> Edit Order
+                    <Edit className="size-3 mr-1" /> Edit
                   </Button>
                 )}
                   {!isCancelled && (
@@ -620,7 +661,7 @@ function OrderTable({ orders, expandedOrderId, onToggleExpand, getStatusColor, o
                       className="h-7 text-[10px] font-bold uppercase text-red-500 hover:text-red-700 hover:bg-red-50 mr-2"
                       onClick={(e) => onCancelClick(e, order)}
                     >
-                      Cancel Order
+                      Cancel
                     </Button>
                   )}
                   {order.status === "sold" && (

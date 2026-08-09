@@ -255,6 +255,39 @@ async def get_inventory(
         print(f"Fetch Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/inventory/summary/{shop_id}")
+async def get_inventory_summary(shop_id: str, conn=Depends(get_db)):
+    """
+    Calculates and returns summary statistics for the entire inventory of a shop.
+    """
+    try:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("""
+                SELECT
+                    COALESCE(SUM(overhead_expense * (qty_display + qty_godown)), 0) AS total_investment,
+                    COUNT(*) FILTER (WHERE created_at < NOW() - INTERVAL '60 days') AS dead_stock_count,
+                    COALESCE(SUM(qty_godown), 0) AS total_godown_stock,
+                    COALESCE(SUM(qty_display + qty_godown), 0) AS total_stock
+                FROM products
+                WHERE shop_id = %s
+            """, (shop_id,))
+            summary = cur.fetchone()
+
+            total_investment = float(summary.get('total_investment', 0))
+            dead_stock_count = int(summary.get('dead_stock_count', 0))
+            total_godown_stock = int(summary.get('total_godown_stock', 0))
+            total_stock = int(summary.get('total_stock', 0))
+
+            godown_ratio = round((total_godown_stock / total_stock) * 100) if total_stock > 0 else 0
+
+            return {
+                "total_investment": total_investment,
+                "dead_stock_count": dead_stock_count,
+                "godown_ratio": godown_ratio
+            }
+    except Exception as e:
+        logger.error(f"Error fetching inventory summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/inventory/stock-check")
 async def check_product_stock(product_ids: List[str] = Body(...), conn = Depends(get_db)):
@@ -887,7 +920,12 @@ async def get_basket_details(order_id: str, conn = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.get("/orders/list/{shop_id}")
-async def list_orders(shop_id: str, status: str = None, conn = Depends(get_db)):
+async def list_orders(
+    shop_id: str, 
+    status: Optional[str] = None, 
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    conn = Depends(get_db)):
     query = """
         SELECT id, status, final_total, created_at, 
                discount_percent, tax_percent, paid_amount, transportation_cost,
@@ -902,6 +940,16 @@ async def list_orders(shop_id: str, status: str = None, conn = Depends(get_db)):
         query += " AND status = %s"
         params.append(status)
 
+    if start_date:
+        # Assumes date is in 'YYYY-MM-DD' format
+        query += " AND created_at >= %s"
+        params.append(start_date)
+    
+    if end_date:
+        # Add 1 day to the end_date to make the range inclusive of the end day
+        query += " AND created_at < (%s::date + interval '1 day')"
+        params.append(end_date)
+
     query += " ORDER BY created_at DESC"
     
     try:
@@ -914,16 +962,30 @@ async def list_orders(shop_id: str, status: str = None, conn = Depends(get_db)):
 
 
 @app.get("/orders/summary/{shop_id}")
-async def orders_summary(shop_id: str, conn = Depends(get_db)):
+async def orders_summary(
+    shop_id: str, 
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    conn = Depends(get_db)):
     """
     Financial summary for Orders dashboard.
     Uses SOLD orders as realized revenue base.
     """
-    query = """
+    params = [shop_id]
+    date_filter_sql = ""
+
+    if start_date:
+        date_filter_sql += " AND created_at >= %s"
+        params.append(start_date)
+    if end_date:
+        date_filter_sql += " AND created_at < (%s::date + interval '1 day')"
+        params.append(end_date)
+
+    query = f"""
         WITH filtered_orders AS (
             SELECT id, final_total, paid_amount, subtotal, discount_amount, extra_discount_amount, write_off_amount
             FROM orders
-            WHERE shop_id = %s AND status = 'sold'
+            WHERE shop_id = %s AND status = 'sold' {date_filter_sql}
         ),
         order_totals AS (
             SELECT
@@ -960,7 +1022,7 @@ async def orders_summary(shop_id: str, conn = Depends(get_db)):
     """
     try:
         with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, (shop_id,))
+                cur.execute(query, tuple(params))
                 res = cur.fetchone() or {}
                 return {
                     "total_revenue": float(res.get("total_revenue") or 0),
