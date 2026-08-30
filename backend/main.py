@@ -234,7 +234,7 @@ async def get_inventory(
                 LEFT JOIN categories c ON p.category_id = c.id                    
                 WHERE p.shop_id = %s
                 {filter_sql}
-                ORDER BY p.created_at DESC
+                ORDER BY p.created_at DESC, p.id DESC
                 LIMIT %s OFFSET %s
                 """, [*params, limit, skip])
                 # Sanitize decimals for JSON
@@ -522,7 +522,11 @@ async def get_active_basket(shop_id: str, conn = Depends(get_db)):
 @app.get("/product/by-code")
 async def get_product_by_code(item_code: str, conn = Depends(get_db)):
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute("SELECT * FROM products WHERE item_code = %s", (item_code,))
+        normalized_code = item_code.strip()
+        cur.execute(
+            "SELECT * FROM products WHERE TRIM(item_code) = %s",
+            (normalized_code,),
+        )
         return cur.fetchone() 
             
 class BasketCreate(BaseModel):
@@ -2059,218 +2063,6 @@ async def write_off_balance(req: WriteOffRequest, conn = Depends(get_db)):
         logger.error(f"Write-off error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/order/revert-to-draft/{order_id}")
-async def revert_order_to_draft(order_id: str, conn=Depends(get_db)):
-    """
-    Reverts a 'sold' order back to a 'bucket' state for editing.
-    This is a transactional operation that also restocks the associated items.
-    """
-    try:
-        with conn.cursor(row_factory=dict_row) as cur:
-            # 1. Verify the order exists and is 'sold'
-            cur.execute("SELECT * FROM orders WHERE id = %s FOR UPDATE", (order_id,))
-            order = cur.fetchone()
-
-            if not order:
-                raise HTTPException(status_code=404, detail="Order not found.")
-            if order['status'] != 'sold':
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Only 'sold' orders can be edited. Current status: {order['status']}."
-                )
-
-            # 1b. Capture the pre-edit state so cancel can fully restore it.
-            cur.execute(
-                """
-                SELECT
-                    oi.product_id,
-                    oi.quantity,
-                    oi.unit_price,
-                    oi.attribute_metadata,
-                    p.item_code
-                FROM order_items oi
-                JOIN products p ON p.id = oi.product_id
-                WHERE oi.order_id = %s
-                ORDER BY oi.created_at ASC
-                """,
-                (order_id,),
-            )
-            original_items = cur.fetchall()
-
-            snapshot = {
-                "order": _sanitize_json(dict(order)),
-                "items": _sanitize_json(original_items),
-            }
-
-            cur.execute(
-                """
-                INSERT INTO order_history (order_id, snapshot)
-                VALUES (%s, %s)
-                """,
-                (order_id, Json(snapshot)),
-            )
-
-            # 2. Get all items and revert stock quantities
-            cur.execute("SELECT product_id, quantity FROM order_items WHERE order_id = %s", (order_id,))
-            items_to_restock = cur.fetchall()
-
-            for item in items_to_restock:
-                cur.execute(
-                    "UPDATE products SET qty_godown = qty_godown + %s WHERE id = %s",
-                    (item['quantity'], item['product_id'])
-                )
-
-            # 3. Update the order status back to 'bucket'
-            cur.execute("UPDATE orders SET status = 'bucket' WHERE id = %s", (order_id,))
-
-            # 4. Log the audit event for this action
-            log_audit_event(
-                cur,
-                shop_id=str(order.get("shop_id")),
-                entity_type="order",
-                entity_id=str(order_id),
-                action="order_reverted_for_edit",
-                notes=f"Order {str(order_id)[:8]} reverted to draft for editing by user."
-            )
-            conn.commit()
-            return {"message": "Order reverted to draft successfully. Items have been restocked."}
-    except Exception as e:
-        logger.error(f"Error reverting order: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/order/cancel-edit/{order_id}")
-async def cancel_order_edit(order_id: str, conn=Depends(get_db)):
-    """
-    Cancels an edit session by restoring a bucket order back to sold
-    using the persisted order items that were in place before editing began.
-    """
-    try:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute("SELECT status, shop_id, client_name FROM orders WHERE id = %s FOR UPDATE", (order_id,))
-            order = cur.fetchone()
-
-            if not order:
-                raise HTTPException(status_code=404, detail="Order not found.")
-            if order["status"] != "bucket":
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Only draft orders can be cancelled from edit. Current status: {order['status']}."
-                )
-
-            cur.execute(
-                """
-                SELECT snapshot
-                FROM order_history
-                WHERE order_id = %s
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                (order_id,),
-            )
-            history_row = cur.fetchone()
-            if not history_row or not history_row.get("snapshot"):
-                raise HTTPException(
-                    status_code=404,
-                    detail="No edit snapshot found for this order."
-                )
-
-            snapshot = history_row["snapshot"]
-            original_order = snapshot.get("order") or {}
-            original_items = snapshot.get("items") or []
-
-            # Remove the edited draft items and restore the original sold items.
-            cur.execute("DELETE FROM order_items WHERE order_id = %s", (order_id,))
-
-            if original_items:
-                restored_values = [
-                    (
-                        order_id,
-                        item["product_id"],
-                        item["quantity"],
-                        item["unit_price"],
-                        json.dumps(item.get("attribute_metadata") or []),
-                    )
-                    for item in original_items
-                ]
-                cur.executemany(
-                    """
-                    INSERT INTO order_items (order_id, product_id, quantity, unit_price, attribute_metadata)
-                    VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    restored_values,
-                )
-
-            # Restore stock based on the original sold order snapshot.
-            for item in original_items:
-                cur.execute(
-                    "SELECT qty_godown, qty_display FROM products WHERE id = %s",
-                    (item["product_id"],),
-                )
-                stock = cur.fetchone()
-                if not stock:
-                    continue
-
-                qty_needed = int(item["quantity"] or 0)
-                if stock["qty_godown"] >= qty_needed:
-                    cur.execute(
-                        "UPDATE products SET qty_godown = qty_godown - %s WHERE id = %s",
-                        (qty_needed, item["product_id"]),
-                    )
-                else:
-                    remainder = qty_needed - int(stock["qty_godown"] or 0)
-                    cur.execute(
-                        "UPDATE products SET qty_godown = 0, qty_display = qty_display - %s WHERE id = %s",
-                        (remainder, item["product_id"]),
-                    )
-
-            restored_status = original_order.get("status") or "sold"
-            cur.execute(
-                """
-                UPDATE orders
-                SET status = %s,
-                    discount_percent = %s,
-                    extra_discount_amount = %s,
-                    transportation_cost = %s,
-                    paid_amount = %s,
-                    client_name = %s,
-                    client_phone = %s,
-                    delivery_address = %s,
-                    referral_source = %s,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = %s
-                """,
-                (
-                    restored_status,
-                    original_order.get("discount_percent") or 0,
-                    original_order.get("extra_discount_amount") or 0,
-                    original_order.get("transportation_cost") or 0,
-                    original_order.get("paid_amount") or 0,
-                    original_order.get("client_name") or "",
-                    original_order.get("client_phone") or "",
-                    original_order.get("delivery_address") or "",
-                    original_order.get("referral_source") or "",
-                    order_id,
-                ),
-            )
-
-            update_order_total(cur, order_id)
-
-            log_audit_event(
-                cur,
-                shop_id=str(order.get("shop_id")),
-                entity_type="order",
-                entity_id=str(order_id),
-                action="order_edit_cancelled",
-                notes=f"Order {str(order_id)[:8]} edit cancelled; original sold order restored.",
-            )
-
-            update_order_total(cur, order_id)
-            conn.commit()
-            return {"message": "Edit cancelled. Order restored to sold state."}
-    except Exception as e:
-        logger.error(f"Error cancelling order edit: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 class FinalizeEditItem(BaseModel):
     product_id: str
     quantity: int
@@ -2297,11 +2089,39 @@ async def finalize_order_edit(req: FinalizeEditRequest, conn=Depends(get_db)):
     """
     try:
         with conn.cursor(row_factory=dict_row) as cur:
-            # 1. Fetch original order state for auditing
+            # 1. Fetch original order state for auditing and stock reconciliation
             cur.execute("SELECT * FROM orders WHERE id = %s FOR UPDATE", (req.order_id,))
             before_order = cur.fetchone()
             if not before_order:
                 raise HTTPException(status_code=404, detail="Order not found.")
+
+            cur.execute(
+                """
+                SELECT product_id, quantity, unit_price, attribute_metadata
+                FROM order_items
+                WHERE order_id = %s
+                ORDER BY created_at ASC
+                """,
+                (req.order_id,),
+            )
+            original_items = cur.fetchall()
+
+            # Restore the sold stock before applying the edited quantities.
+            if before_order.get("status") == "sold":
+                for item in original_items:
+                    cur.execute(
+                        "SELECT qty_godown, qty_display FROM products WHERE id = %s FOR UPDATE",
+                        (item["product_id"],),
+                    )
+                    stock = cur.fetchone()
+                    if not stock:
+                        continue
+
+                    qty_to_restore = int(item["quantity"] or 0)
+                    cur.execute(
+                        "UPDATE products SET qty_godown = qty_godown + %s WHERE id = %s",
+                        (qty_to_restore, item["product_id"]),
+                    )
 
             # 2. Wipe old order items
             cur.execute("DELETE FROM order_items WHERE order_id = %s", (req.order_id,))
@@ -2322,18 +2142,28 @@ async def finalize_order_edit(req: FinalizeEditRequest, conn=Depends(get_db)):
                     VALUES (%s, %s, %s, %s, %s)
                 """, item_values)
 
-            # 4. Deduct final stock (revert-to-draft already restocked everything)
+            # 4. Deduct final stock against the current inventory state
             for item in req.items:
-                cur.execute("SELECT qty_godown FROM products WHERE id = %s", (item.product_id,))
+                cur.execute(
+                    "SELECT qty_godown, qty_display FROM products WHERE id = %s FOR UPDATE",
+                    (item.product_id,),
+                )
                 stock = cur.fetchone()
                 if not stock: continue
 
-                qty_needed = item.quantity
-                if stock['qty_godown'] >= qty_needed:
-                    cur.execute("UPDATE products SET qty_godown = qty_godown - %s WHERE id = %s", (qty_needed, item.product_id))
+                qty_needed = int(item.quantity or 0)
+                godown_qty = int(stock["qty_godown"] or 0)
+                if godown_qty >= qty_needed:
+                    cur.execute(
+                        "UPDATE products SET qty_godown = qty_godown - %s WHERE id = %s",
+                        (qty_needed, item.product_id),
+                    )
                 else:
-                    remainder = qty_needed - stock['qty_godown']
-                    cur.execute("UPDATE products SET qty_godown = 0, qty_display = qty_display - %s WHERE id = %s", (remainder, item.product_id))
+                    remainder = qty_needed - godown_qty
+                    cur.execute(
+                        "UPDATE products SET qty_godown = 0, qty_display = qty_display - %s WHERE id = %s",
+                        (remainder, item.product_id),
+                    )
 
             # 5. Update the order with new financial details and set status back to 'sold'
             cur.execute("""

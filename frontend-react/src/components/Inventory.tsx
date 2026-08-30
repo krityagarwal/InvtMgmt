@@ -230,20 +230,17 @@ React.useEffect(() => {
       matchesSearch = results.some(r => r.item.id === product.id);
     }
     
-    // 2. Category Filter Logic
-    const matchesCategory = usesBackendFilters || filterCategory === "all" || product.category === filterCategory;
+    // 2. Category Filter Logic — always apply on the client so stale paginated rows
+    // from a previous filter cannot appear while backend results are in flight.
+    const matchesCategory = filterCategory === "all" || product.category === filterCategory;
 
     // 3. Vendor Filter Logic
-    // const matchesVendor = filters.vendor === "all" || product.vendor === filters.vendor;
-
-    // Inside filteredProducts.filter()
-    const matchesVendor = usesBackendFilters || filters.vendor === "all" || 
+    const matchesVendor = filters.vendor === "all" ||
       (product.vendor && product.vendor.trim().toUpperCase() === filters.vendor);
 
     // 4. Display Qty Numeric Logic
     const displayVal = Number(filters.displayQty.value);
-    const matchesDisplay = 
-      usesBackendFilters ||
+    const matchesDisplay =
       filters.displayQty.operator === "any" || filters.displayQty.value === "" ? true :
       filters.displayQty.operator === "equals" ? product.displayStock === displayVal :
       filters.displayQty.operator === "gt" ? product.displayStock > displayVal :
@@ -251,8 +248,7 @@ React.useEffect(() => {
 
     // 5. Godown Qty Numeric Logic
     const godownVal = Number(filters.godownQty.value);
-    const matchesGodown = 
-      usesBackendFilters ||
+    const matchesGodown =
       filters.godownQty.operator === "any" || filters.godownQty.value === "" ? true :
       filters.godownQty.operator === "equals" ? product.godownStock === godownVal :
       filters.godownQty.operator === "gt" ? product.godownStock > godownVal :
@@ -273,15 +269,15 @@ React.useEffect(() => {
       const results = fuse.search(searchTerm);
       matchesSearch = results.some(r => r.item.id === product.id);
     }
-    const matchesCategory = usesBackendFilters || filterCategory === "all" || product.category === filterCategory;
-    const matchesVendor = usesBackendFilters || filters.vendor === "all" || (product.vendor && product.vendor.trim().toUpperCase() === filters.vendor);
+    const matchesCategory = filterCategory === "all" || product.category === filterCategory;
+    const matchesVendor = filters.vendor === "all" || (product.vendor && product.vendor.trim().toUpperCase() === filters.vendor);
     const displayVal = Number(filters.displayQty.value);
-    const matchesDisplay = usesBackendFilters || filters.displayQty.operator === "any" || filters.displayQty.value === "" ? true :
+    const matchesDisplay = filters.displayQty.operator === "any" || filters.displayQty.value === "" ? true :
       filters.displayQty.operator === "equals" ? product.displayStock === displayVal :
       filters.displayQty.operator === "gt" ? product.displayStock > displayVal :
       filters.displayQty.operator === "lt" ? product.displayStock < displayVal : true;
     const godownVal = Number(filters.godownQty.value);
-    const matchesGodown = usesBackendFilters || filters.godownQty.operator === "any" || filters.godownQty.value === "" ? true :
+    const matchesGodown = filters.godownQty.operator === "any" || filters.godownQty.value === "" ? true :
       filters.godownQty.operator === "equals" ? product.godownStock === godownVal :
       filters.godownQty.operator === "gt" ? product.godownStock > godownVal :
       filters.godownQty.operator === "lt" ? product.godownStock < godownVal : true;

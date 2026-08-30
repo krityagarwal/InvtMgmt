@@ -2,7 +2,7 @@ fastapi==0.111.0
 uvicorn==0.29.0
 python-dotenv==1.0.1
 pydantic-settings==2.2.1
-psycopg[binary]==3.1.18
+psycopg[binary]>=3.3.0  # 3.1.x has no wheels for Python 3.14+
 supabase==2.3.0
 httpx==0.24.1
 pydantic==2.5.2

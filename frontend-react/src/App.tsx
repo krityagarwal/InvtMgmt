@@ -138,6 +138,7 @@ export default function App() {
   const [orderDateFilters, setOrderDateFilters] = useState<OrderDateFilter>({ startDate: null, endDate: null });
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const inventoryRequestIdRef = useRef(0);
+  const inventoryFilterEpochRef = useRef(0);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
 
   const viewRef = useRef(currentView);
@@ -400,8 +401,18 @@ const handleBulkAdd = async (newItems: any[]) => {
   }
 };
 
-  const handleLoadInventory = useCallback(async (skip: number = 0, filtersOverride?: InventoryFilterState) => {
+  const handleLoadInventory = useCallback(async (
+    skip: number = 0,
+    filtersOverride?: InventoryFilterState,
+    filterEpoch?: number
+  ) => {
     const activeFilters = filtersOverride ?? inventoryFilters;
+    const activeEpoch = filterEpoch ?? inventoryFilterEpochRef.current;
+
+    if (skip === 0) {
+      setProducts([]);
+    }
+
     const params = new URLSearchParams({
       skip: String(skip),
       limit: "20",
@@ -438,6 +449,7 @@ const handleBulkAdd = async (newItems: any[]) => {
     ]);
 
     if (requestId !== inventoryRequestIdRef.current) return;
+    if (activeEpoch !== inventoryFilterEpochRef.current) return;
     
     // Handle both old format (array) and new format (paginated object)
     const items = Array.isArray(inventoryData) ? inventoryData : inventoryData.data || [];
@@ -473,7 +485,16 @@ const handleBulkAdd = async (newItems: any[]) => {
       setProducts(mappedProducts);
     } else {
       // Subsequent pages - append products
-      setProducts(prev => [...prev, ...mappedProducts]);
+      setProducts(prev => {
+        const seen = new Set(prev.map((product) => product.id));
+        const merged = [...prev];
+        for (const product of mappedProducts) {
+          if (seen.has(product.id)) continue;
+          seen.add(product.id);
+          merged.push(product);
+        }
+        return merged;
+      });
     }
     
     setInventoryPagination({
@@ -486,17 +507,24 @@ const handleBulkAdd = async (newItems: any[]) => {
   }, [inventoryFilters]);
 
   const handleLoadMoreInventory = async () => {
-    if (inventoryPagination.hasMore) {
-      const nextSkip = inventoryPagination.skip + inventoryPagination.limit;
-      await handleLoadInventory(nextSkip);
-    }
+    if (!inventoryPagination.hasMore) return;
+
+    const epoch = inventoryFilterEpochRef.current;
+    const nextSkip = inventoryPagination.skip + inventoryPagination.limit;
+    await handleLoadInventory(nextSkip, inventoryFilters, epoch);
   };
 
   const handleInventoryFiltersChange = useCallback(async (nextFilters: InventoryFilterState) => {
     if (JSON.stringify(nextFilters) === JSON.stringify(inventoryFilters)) return;
 
+    inventoryFilterEpochRef.current += 1;
+    const epoch = inventoryFilterEpochRef.current;
+
     setInventoryFilters(nextFilters);
-    await handleLoadInventory(0, nextFilters);
+    setProducts([]);
+    setInventoryPagination({ total: 0, skip: 0, limit: 20, hasMore: false });
+
+    await handleLoadInventory(0, nextFilters, epoch);
   }, [handleLoadInventory, inventoryFilters]);
 
   // On-demand: Load active carts when button is clicked
@@ -638,12 +666,13 @@ const handleBulkAdd = async (newItems: any[]) => {
 
   const handleProductSearch = async (code: string) => {
     if (!inventoryReady) return;   
-    if (!code.trim()) return;
+    const normalizedCode = code.trim();
+    if (!normalizedCode) return;
     // PREVENT LOOP: Don't search if the result is already for this code
-    if (searchResult && searchResult.barcode === code) return;
+    if (searchResult && searchResult.barcode === normalizedCode) return;
     try {
       // apiCall triggers the GlobalLoader automatically
-      const item = await apiCall(`${API_BASE_URL}/product/by-code?item_code=${encodeURIComponent(code)}`);
+      const item = await apiCall(`${API_BASE_URL}/product/by-code?item_code=${encodeURIComponent(normalizedCode)}`);
       
       if (item && !item.error) {
         const foundProduct: Product = {
@@ -2006,6 +2035,7 @@ const handleAddToCart = async (product: Product, quantity: number = 1, attribute
       setEditingOrderId(null);
       setCurrentView("orders");
       // Optionally, refresh orders list to show the updated data immediately
+      await handleLoadInventory();
       await handleLoadOrders(true);
 
     } catch (error) {
